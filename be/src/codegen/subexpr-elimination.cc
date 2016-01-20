@@ -18,10 +18,10 @@
 #include <iostream>
 #include <sstream>
 
-#include <llvm/Analysis/Dominators.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/Analysis/InstructionSimplify.h>
 #include <llvm/Analysis/Passes.h>
-#include <llvm/Support/InstIterator.h>
+#include <llvm/IR/InstIterator.h>
 #include "llvm/Transforms/IPO.h"
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils/SSAUpdater.h>
@@ -136,7 +136,8 @@ bool SubExprElimination::Run(Function* fn) {
   map<pair<Function*, Value*>, CachedExprResult> cached_slot_ref_results;
 
   // Step 2:
-  DominatorTree dom_tree;
+//  DominatorTree dom_tree;
+  DominatorTreeWrapperPass dom_tree;
   dom_tree.runOnFunction(*fn);
 
   inst_iterator fn_end = inst_end(fn);
@@ -194,7 +195,7 @@ bool SubExprElimination::Run(Function* fn) {
     } else {
       // Reuse the result.
       CachedExprResult& cache_entry = cached_slot_ref_results[call_desc];
-      if (dom_tree.dominates(cache_entry.result, call_instr)) {
+      if (dom_tree.getDomTree().dominates(cache_entry.result, call_instr)) {
         new StoreInst(cache_entry.is_null_value, loaded_ptr, call_instr);
         call_instr->replaceAllUsesWith(cache_entry.result);
         call_instr->eraseFromParent();

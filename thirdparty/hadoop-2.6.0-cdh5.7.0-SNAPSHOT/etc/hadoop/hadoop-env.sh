@@ -22,14 +22,13 @@
 # remote nodes.
 
 # The java implementation to use.
-export JAVA_HOME=${JAVA_HOME}
+export JAVA_HOME=/usr/lib/jvm/java-1.7.0-openjdk-ppc64el
 
 # The jsvc implementation to use. Jsvc is required to run secure datanodes
 # that bind to privileged ports to provide authentication of data transfer
 # protocol.  Jsvc is not required if SASL is configured for authentication of
 # data transfer protocol using non-privileged ports.
 #export JSVC_HOME=${JSVC_HOME}
-
 export HADOOP_CONF_DIR=${HADOOP_CONF_DIR:-"/etc/hadoop"}
 
 # Extra Java CLASSPATH elements.  Automatically insert capacity-scheduler.
@@ -46,7 +45,7 @@ done
 #export HADOOP_NAMENODE_INIT_HEAPSIZE=""
 
 # Extra Java runtime options.  Empty by default.
-export HADOOP_OPTS="$HADOOP_OPTS -Djava.net.preferIPv4Stack=true"
+export HADOOP_OPTS="$HADOOP_OPTS -Djava.net.preferIPv4Stack=true -Djava.library.path=$HADOOP_HOME/lib/native/"
 
 # Command specific options appended to HADOOP_OPTS when specified
 export HADOOP_NAMENODE_OPTS="-Dhadoop.security.logger=${HADOOP_SECURITY_LOGGER:-INFO,RFAS} -Dhdfs.audit.logger=${HDFS_AUDIT_LOGGER:-INFO,NullAppender} $HADOOP_NAMENODE_OPTS"

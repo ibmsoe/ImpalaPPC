@@ -569,14 +569,14 @@ Value* CodegenAnyVal::Eq(CodegenAnyVal* other) {
     case TYPE_STRING:
     case TYPE_VARCHAR: {
       Function* eq_fn = codegen_->GetFunction(IRFunction::CODEGEN_ANYVAL_STRING_VAL_EQ);
-      return builder_->CreateCall2(
-          eq_fn, GetUnloweredPtr(), other->GetUnloweredPtr(), "eq");
+      return builder_->CreateCall(
+          eq_fn, {GetUnloweredPtr(), other->GetUnloweredPtr()}, "eq");
     }
     case TYPE_TIMESTAMP: {
       Function* eq_fn =
           codegen_->GetFunction(IRFunction::CODEGEN_ANYVAL_TIMESTAMP_VAL_EQ);
-      return builder_->CreateCall2(
-          eq_fn, GetUnloweredPtr(), other->GetUnloweredPtr(), "eq");
+      return builder_->CreateCall(
+          eq_fn, {GetUnloweredPtr(), other->GetUnloweredPtr()}, "eq");
     }
     default:
       DCHECK(false) << "NYI: " << type_.DebugString();
@@ -605,12 +605,12 @@ Value* CodegenAnyVal::EqToNativePtr(Value* native_ptr) {
     case TYPE_STRING:
     case TYPE_VARCHAR: {
       Function* eq_fn = codegen_->GetFunction(IRFunction::CODEGEN_ANYVAL_STRING_VALUE_EQ);
-      return builder_->CreateCall2(eq_fn, GetUnloweredPtr(), native_ptr, "cmp_raw");
+      return builder_->CreateCall(eq_fn, {GetUnloweredPtr(), native_ptr}, "cmp_raw");
     }
     case TYPE_TIMESTAMP: {
       Function* eq_fn =
           codegen_->GetFunction(IRFunction::CODEGEN_ANYVAL_TIMESTAMP_VALUE_EQ);
-      return builder_->CreateCall2(eq_fn, GetUnloweredPtr(), native_ptr, "cmp_raw");
+      return builder_->CreateCall(eq_fn, {GetUnloweredPtr(), native_ptr}, "cmp_raw");
     }
     default:
       DCHECK(false) << "NYI: " << type_.DebugString();

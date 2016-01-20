@@ -41,8 +41,8 @@
   /// glog MUST be included before gflags.  Instead of including them,
   /// our files should include this file instead.
   #undef _XOPEN_SOURCE
-  #include <glog/logging.h>
   #include <gflags/gflags.h>
+  #include <glog/logging.h>  
 #endif
 
 /// Define verbose logging levels.  Per-row logging is more verbase than per-file /

@@ -27,6 +27,9 @@ find_library(SASL_STATIC_LIBRARY NAMES libsasl2.a
         DOC   "Cyrus-sasl library"
 )
 
+set(SASL_INCLUDE_DIR /usr/include/)
+set(SASL_STATIC_LIBRARY $ENV{LD_LIBRARY_PATH})
+
 if (NOT SASL_STATIC_LIBRARY OR NOT SASL_INCLUDE_DIR)
   set(SASL_FOUND FALSE)
   message(FATAL_ERROR "SASL includes and libraries NOT found.")

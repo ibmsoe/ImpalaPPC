@@ -10,9 +10,10 @@
 set(THIRDPARTY_LDAP $ENV{IMPALA_HOME}/thirdparty/openldap-$ENV{IMPALA_OPENLDAP_VERSION})
 
 set(THIRDPARTY $ENV{IMPALA_HOME}/thirdparty)
+set(OPENLDAP_ROOT ${THIRDPARTY_LDAP})
 set(LDAP_SEARCH_LIB_PATH
-  ${OPENLDAP_ROOT}/lib
-  ${THIRDPARTY}/openldap-$ENV{IMPALA_OPENLDAP_VERSION}/impala_install/lib
+  ${OPENLDAP_ROOT}/libraries
+#  ${THIRDPARTY}/openldap-$ENV{IMPALA_OPENLDAP_VERSION}/impala_install/lib
 )
 
 find_path(LDAP_INCLUDE_DIR ldap.h PATHS
@@ -21,23 +22,24 @@ find_path(LDAP_INCLUDE_DIR ldap.h PATHS
   NO_DEFAULT_PATH)
 
 find_library(LDAP_STATIC_LIBRARY libldap.a
-  PATHS ${LDAP_SEARCH_LIB_PATH}
+  PATHS ${LDAP_SEARCH_LIB_PATH}/libldap/.libs/
         NO_DEFAULT_PATH
         DOC   "Static Openldap library"
 )
 
 find_library(LBER_STATIC_LIBRARY liblber.a
-  PATHS ${LDAP_SEARCH_LIB_PATH}
+  PATHS ${LDAP_SEARCH_LIB_PATH}/liblber/.libs
         NO_DEFAULT_PATH
         DOC   "Static Openldap lber library"
 )
 
+
 if (NOT LDAP_STATIC_LIBRARY OR NOT LBER_STATIC_LIBRARY OR
     NOT LDAP_INCLUDE_DIR)
-  message(FATAL_ERROR "LDAP includes and libraries NOT found.")
-  set(LDAP_FOUND TRUE)
-else()
+  message(FATAL_ERROR "LDAP includes and libraries NOT found. ${OPENLDAP_ROOT}")
   set(LDAP_FOUND FALSE)
+else()
+  set(LDAP_FOUND TRUE)
   add_library(ldapstatic STATIC IMPORTED)
   set_target_properties(ldapstatic PROPERTIES IMPORTED_LOCATION ${LDAP_STATIC_LIBRARY})
   add_library(lberstatic STATIC IMPORTED)

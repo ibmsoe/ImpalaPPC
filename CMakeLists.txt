@@ -44,6 +44,8 @@ endif()
 # initialized.
 project(Impala)
 
+set(IMPALA_TOOLCHAIN OFF)
+
 if (NOT DEFINED BUILD_SHARED_LIBS)
   set(BUILD_SHARED_LIBS OFF)
 endif()

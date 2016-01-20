@@ -9,7 +9,7 @@
 #  thriftstatic - imported static library
 
 # prefer the thrift version supplied in THRIFT_HOME
-message(STATUS "THRIFT_HOME: $ENV{THRIFT_HOME}")
+
 find_path(THRIFT_INCLUDE_DIR thrift/Thrift.h HINTS
   ${THRIFT_ROOT}/include
   $ENV{THRIFT_HOME}/include/
@@ -17,7 +17,7 @@ find_path(THRIFT_INCLUDE_DIR thrift/Thrift.h HINTS
   /opt/local/include/
 )
 
-find_path(THRIFT_CONTRIB_DIR share/fb303/if/fb303.thrift HINTS
+find_path(THRIFT_CONTRIB_DIR ./contrib/fb303/if/fb303.thrift HINTS
   ${THRIFT_ROOT}/include
   $ENV{THRIFT_HOME}
   /usr/local/
@@ -25,9 +25,10 @@ find_path(THRIFT_CONTRIB_DIR share/fb303/if/fb303.thrift HINTS
 
 set(THRIFT_LIB_PATHS
   ${THRIFT_ROOT}/lib
-  $ENV{THRIFT_HOME}/lib
+  $ENV{THRIFT_HOME}/lib/cpp/.libs
   /usr/local/lib
-  /opt/local/lib)
+  /opt/local/lib
+  /usr/lib)
 
 find_path(THRIFT_STATIC_LIB_PATH libthrift.a PATHS ${THRIFT_LIB_PATHS})
 
@@ -67,5 +68,6 @@ mark_as_advanced(
   THRIFT_LIB
   THRIFT_COMPILER
   THRIFT_INCLUDE_DIR
+  THRIFT_CONTRIB_DIR
   thriftstatic
 )

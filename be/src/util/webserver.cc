@@ -147,7 +147,7 @@ string BuildHeaderString(ResponseCode response, ContentType content_type) {
 
 Webserver::Webserver()
     : context_(NULL),
-      error_handler_(UrlHandler(bind<void>(&Webserver::ErrorHandler, this, _1, _2),
+      error_handler_(UrlHandler(bind<void>(mem_fn(&Webserver::ErrorHandler), this, _1, _2),
           "error.tmpl", false)) {
   http_address_ = MakeNetworkAddress(
       FLAGS_webserver_interface.empty() ? "0.0.0.0" : FLAGS_webserver_interface,
@@ -156,7 +156,7 @@ Webserver::Webserver()
 
 Webserver::Webserver(const int port)
     : context_(NULL),
-      error_handler_(UrlHandler(bind<void>(&Webserver::ErrorHandler, this, _1, _2),
+      error_handler_(UrlHandler(bind<void>(mem_fn(&Webserver::ErrorHandler), this, _1, _2),
           "error.tmpl", false)) {
   http_address_ = MakeNetworkAddress("0.0.0.0", port);
 }

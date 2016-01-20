@@ -21,6 +21,7 @@
 
 #include "util/cpu-info.h"
 #include "util/sse-util.h"
+#include <boost/crc.hpp> 
 
 namespace impala {
 
@@ -35,22 +36,29 @@ class HashUtil {
   /// TODO: crc32 hashes with different seeds do not result in different hash functions.
   /// The resulting hashes are correlated.
   static uint32_t CrcHash(const void* data, int32_t bytes, uint32_t hash) {
+#ifndef __SSE4_2_
+      boost::crc_optimal<32, 0x1EDC6F41, 0x0, 0x0, true, true> CRC32_Processor;
+      //boost::crc_32_type  result;
+      const char* str = reinterpret_cast<const char*>(data);
+      CRC32_Processor.process_bytes( str, bytes);
+      hash = CRC32_Processor.checksum();
+#else
     DCHECK(CpuInfo::IsSupported(CpuInfo::SSE4_2));
     uint32_t words = bytes / sizeof(uint32_t);
     bytes = bytes % sizeof(uint32_t);
 
     const uint32_t* p = reinterpret_cast<const uint32_t*>(data);
     while (words--) {
-      hash = SSE4_crc32_u32(hash, *p);
-      ++p;
+    hash = SSE4_crc32_u32(hash, *p);
+    ++p;
     }
 
     const uint8_t* s = reinterpret_cast<const uint8_t*>(p);
     while (bytes--) {
-      hash = SSE4_crc32_u8(hash, *s);
-      ++s;
+    hash = SSE4_crc32_u8(hash, *s);
+    ++s;
     }
-
+#endif
     // The lower half of the CRC hash has has poor uniformity, so swap the halves
     // for anyone who only uses the first several bits of the hash.
     hash = (hash << 16) | (hash >> 16);

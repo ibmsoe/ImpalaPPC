@@ -10,6 +10,7 @@
 find_program(LLVM_CONFIG_EXECUTABLE llvm-config
   PATHS
   ${LLVM_ROOT}/bin
+#  /usr/lib/llvm-3.6
   $ENV{LLVM_HOME}
   NO_DEFAULT_PATH
 )
@@ -79,13 +80,14 @@ execute_process(
 # Get the link libs we need.  llvm has many and we don't want to link all of the libs
 # if we don't need them.
 execute_process(
-  COMMAND ${LLVM_CONFIG_EXECUTABLE} --libnames core jit native ipo bitreader target linker
+  COMMAND ${LLVM_CONFIG_EXECUTABLE} --libnames core mcjit native ipo bitreader target linker
   OUTPUT_VARIABLE LLVM_MODULE_LIBS
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
 # CMake really doesn't like adding link directories and wants absolute paths
 # Reconstruct it with LLVM_MODULE_LIBS and LLVM_LIBRARY_DIR
+message(STATUS "LLVM libs before replace: ${LLVM_MODULE_LIBS}")
 string(REPLACE " " ";" LIBS_LIST ${LLVM_MODULE_LIBS})
 set (LLVM_MODULE_LIBS "-ldl")
 foreach (LIB ${LIBS_LIST})

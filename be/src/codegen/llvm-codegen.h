@@ -25,7 +25,7 @@
 #include <boost/thread/mutex.hpp>
 #include <boost/unordered_set.hpp>
 
-#include <llvm/Analysis/Verifier.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
@@ -46,11 +46,9 @@ namespace llvm {
   class ConstantFolder;
   class ExecutionEngine;
   class Function;
-  class FunctionPassManager;
   class LLVMContext;
   class Module;
   class NoFolder;
-  class PassManager;
   class PointerType;
   class StructType;
   class TargetData;

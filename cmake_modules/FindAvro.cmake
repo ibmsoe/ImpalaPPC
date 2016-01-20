@@ -19,7 +19,7 @@ find_path(AVRO_INCLUDE_DIR NAMES avro/schema.h schema.h PATHS
 
 find_library(AVRO_STATIC_LIB NAMES libavro.a PATHS ${AVRO_SEARCH_LIB_PATH})
 
-if(NOT AVRO_STATIC_LIB)
+if(NOT AVRO_STATIC_LIB OR NOT AVRO_INCLUDE_DIR)
   message(FATAL_ERROR "Avro includes and libraries NOT found. "
     "Looked for headers in ${AVRO_SEARCH_HEADER_PATHS}, "
     "and for libs in ${AVRO_SEARCH_LIB_PATH}")

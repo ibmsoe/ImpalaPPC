@@ -36,6 +36,8 @@ macro(JAVA_APPEND_LIBRARY_DIRECTORIES _var)
             set(_java_libarch "i386")
         elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
             set(_java_libarch "amd64" "x86_64")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64le")
+            set(_java_libarch "ppc64" "ppc64le")
         elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "^ppc")
             set(_java_libarch "ppc" "powerpc" "ppc64")
         elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "^sparc")
@@ -80,7 +82,9 @@ java_append_library_directories(JAVA_AWT_LIBRARY_DIRECTORIES
     /usr/lib
     /usr/local/lib
     /usr/lib/jvm/java/lib
+    /usr/lib/jvm/java-1.7.0-openjdk-ppc64el/lib
     /usr/lib/java/jre/lib/{libarch}
+    /usr/lib/jvm/java-1.7.0-openjdk-ppc64el/jre/lib/{libarch}
     /usr/local/lib/java/jre/lib/{libarch}
     /usr/local/share/java/jre/lib/{libarch}
     /usr/lib/j2sdk1.4-sun/jre/lib/{libarch}

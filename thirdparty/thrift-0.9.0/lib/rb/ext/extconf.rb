@@ -22,9 +22,9 @@ if defined?(RUBY_ENGINE) && RUBY_ENGINE =~ /jruby/
 else
   require 'mkmf'
 
-  $ARCH_FLAGS = Config::CONFIG['CFLAGS'].scan( /(-arch )(\S+)/ ).map{|x,y| x + y + ' ' }.join('')
+  $ARCH_FLAGS = RbConfig::CONFIG['CFLAGS'].scan( /(-arch )(\S+)/ ).map{|x,y| x + y + ' ' }.join('')
 
-  $CFLAGS = "-g -O2 -Wall -Werror " + $ARCH_FLAGS
+  $CFLAGS = "-fsigned-char -g -O2 -Wall -Werror " + $ARCH_FLAGS
 
   have_func("strlcpy", "string.h")
 

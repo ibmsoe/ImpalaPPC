@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include "codegen/llvm-codegen.h"
 
 #include <fstream>
@@ -24,21 +25,20 @@
 #include <llvm/Analysis/Passes.h>
 #include <llvm/Bitcode/ReaderWriter.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/ExecutionEngine/JIT.h>
+#include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/DataLayout.h>
-#include <llvm/Linker.h>
-#include <llvm/PassManager.h>
+#include <llvm/Linker/Linker.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Host.h>
-#include "llvm/Support/InstIterator.h"
-#include <llvm/Support/NoFolder.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/NoFolder.h>
 #include <llvm/Support/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/Support/system_error.h>
-#include <llvm/Target/TargetLibraryInfo.h>
+#include <system_error>
+#include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Transforms/IPO.h>
-#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -81,8 +81,9 @@ void LlvmCodeGen::InitializeLlvm(bool load_backend) {
   if (llvm_initialized) return;
   // This allocates a global llvm struct and enables multithreading.
   // There is no real good time to clean this up but we only make it once.
-  bool result = llvm::llvm_start_multithreaded();
-  DCHECK(result);
+  //TODO:: Need to confirm this with LLVM 3.5 developer!!!!
+  //bool result = llvm::llvm_start_multithreaded();
+  //DCHECK(result);
   // This can *only* be called once per process and is used to setup
   // dynamically linking jitted code.
   llvm::InitializeNativeTarget();
@@ -147,30 +148,36 @@ Status LlvmCodeGen::LoadFromMemory(ObjectPool* pool, MemoryBuffer* module_ir,
 
 Status LlvmCodeGen::LoadModuleFromFile(LlvmCodeGen* codegen, const string& file,
       llvm::Module** module) {
-  OwningPtr<MemoryBuffer> file_buffer;
+  
+  MemoryBuffer* buf = NULL;  
+  // TODO:: Check this at runtime!!!
+  size_t fileBufferSize = 0;
   {
     SCOPED_TIMER(codegen->load_module_timer_);
 
-    llvm::error_code err = MemoryBuffer::getFile(file, file_buffer);
-    if (err.value() != 0) {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> BufferOrErr = MemoryBuffer::getFile(file);
+    if (std::error_code EC = BufferOrErr.getError()) {
       stringstream ss;
-      ss << "Could not load module " << file << ": " << err.message();
+      ss << "Could not load module " << file << ": " << EC.message();
       return Status(ss.str());
     }
+    fileBufferSize = (*BufferOrErr)->getBufferSize();
+    buf = BufferOrErr->release();
   }
 
-  COUNTER_ADD(codegen->module_file_size_, file_buffer->getBufferSize());
-  return LoadModuleFromMemory(codegen, file_buffer.get(), file, module);
+  COUNTER_ADD(codegen->module_file_size_, fileBufferSize );
+  return LoadModuleFromMemory(codegen, buf, file, module);
 }
 
 Status LlvmCodeGen::LoadModuleFromMemory(LlvmCodeGen* codegen, MemoryBuffer* module_ir,
       std::string module_name, llvm::Module** module) {
   SCOPED_TIMER(codegen->prepare_module_timer_);
   string error;
-  *module = ParseBitcodeFile(module_ir, codegen->context(), &error);
-  if (*module == NULL) {
+  
+  ErrorOr<Module *> moduleErr = parseBitcodeFile(module_ir, codegen->context());
+  if (std::error_code EC = moduleErr.getError()) {
     stringstream ss;
-    ss << "Could not parse module " << module_name << ": " << error;
+    ss << "Could not parse module " << module_name << ": " << EC.message();
     return Status(ss.str());
   }
   return Status::OK();
@@ -330,7 +337,7 @@ string LlvmCodeGen::GetIR(bool full_module) const {
     module_->print(stream, NULL);
   } else {
     for (int i = 0; i < codegend_functions_.size(); ++i) {
-      codegend_functions_[i]->print(stream, NULL);
+      codegend_functions_[i]->print(stream);
     }
   }
   return str;
@@ -483,7 +490,8 @@ bool LlvmCodeGen::VerifyFunction(Function* fn) {
     }
   }
 
-  if (!is_corrupt_) is_corrupt_ = llvm::verifyFunction(*fn, PrintMessageAction);
+//  if (!is_corrupt_) is_corrupt_ = llvm::verifyFunction(*fn, PrintMessageAction);
+  if (!is_corrupt_) is_corrupt_ = llvm::verifyFunction(*fn);
 
   if (is_corrupt_) {
     string fn_name = fn->getName(); // llvm has some fancy operator overloading
@@ -704,7 +712,7 @@ void LlvmCodeGen::OptimizeModule() {
 
   // Specifying the data layout is necessary for some optimizations (e.g. removing many
   // of the loads/stores produced by structs).
-  const string& data_layout_str = module_->getDataLayout();
+  const string& data_layout_str = module_->getDataLayoutStr();
   DCHECK(!data_layout_str.empty());
 
   // Before running any other optimization passes, run the internalize pass, giving it
@@ -716,27 +724,28 @@ void LlvmCodeGen::OptimizeModule() {
   for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
     exported_fn_names.push_back(fns_to_jit_compile_[i].first->getName().data());
   }
-  scoped_ptr<PassManager> module_pass_manager(new PassManager());
-  module_pass_manager->add(new DataLayout(data_layout_str));
-  module_pass_manager->add(createInternalizePass(exported_fn_names));
-  module_pass_manager->add(createGlobalDCEPass());
-  module_pass_manager->run(*module_);
+  scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
+  module_pass_manager->addPass(new DataLayout(data_layout_str));
+  module_pass_manager->addPass(createInternalizePass(exported_fn_names));
+  module_pass_manager->addPass(createGlobalDCEPass());
+  module_pass_manager->run(module_);
 
   // Create and run function pass manager
-  scoped_ptr<FunctionPassManager> fn_pass_manager(new FunctionPassManager(module_));
-  fn_pass_manager->add(new DataLayout(data_layout_str));
+  scoped_ptr<llvm::FunctionPassManager> fn_pass_manager(new llvm::FunctionPassManager());
+  fn_pass_manager->addPass(new DataLayout(data_layout_str));
   pass_builder.populateFunctionPassManager(*fn_pass_manager);
   fn_pass_manager->doInitialization();
   for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
-    if (!it->isDeclaration()) fn_pass_manager->run(*it);
+    if (!it->isDeclaration()) fn_pass_manager->run(it);
   }
   fn_pass_manager->doFinalization();
 
   // Create and run module pass manager
-  module_pass_manager.reset(new PassManager());
-  module_pass_manager->add(new DataLayout(data_layout_str));
+  module_pass_manager.reset(new ModulePassManager());
+  module_pass_manager->addPass(new DataLayout(data_layout_str));
+// TODO: Check this at runtime
   pass_builder.populateModulePassManager(*module_pass_manager);
-  module_pass_manager->run(*module_);
+  module_pass_manager->run(module_);
   if (FLAGS_print_llvm_ir_instruction_count) {
     for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
       InstructionCounter counter;

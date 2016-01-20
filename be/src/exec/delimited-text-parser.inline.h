@@ -100,6 +100,10 @@ inline void DelimitedTextParser::ParseSse(int max_tuples,
     char** row_end_locations,
     FieldLocation* field_locations,
     int* num_tuples, int* num_fields, char** next_column_start) {
+
+#ifdef __SSE4_2_
+#warning "TODO: Fix this for PPC!!!"
+
   DCHECK(CpuInfo::IsSupported(CpuInfo::SSE4_2));
 
   // To parse using SSE, we:
@@ -214,12 +218,17 @@ inline void DelimitedTextParser::ParseSse(int max_tuples,
     *remaining_len -= SSEUtil::CHARS_PER_128_BIT_REGISTER;
     *byte_buffer_ptr += SSEUtil::CHARS_PER_128_BIT_REGISTER;
   }
+#endif
 }
 
 /// Simplified version of ParseSSE which does not handle tuple delimiters.
 template <bool process_escapes>
 inline void DelimitedTextParser::ParseSingleTuple(int64_t remaining_len, char* buffer,
     FieldLocation* field_locations, int* num_fields) {
+
+#ifdef __SSE4_2_
+#warning "TODO: Fix this for PPC!!!"
+
   char* next_column_start = buffer;
   __m128i xmm_buffer, xmm_delim_mask, xmm_escape_mask;
 
@@ -294,14 +303,15 @@ inline void DelimitedTextParser::ParseSingleTuple(int64_t remaining_len, char* b
 
     --remaining_len;
     ++buffer;
+
   }
 
   // Last column does not have a delimiter after it.  Add that column and also
   // pad with empty cols if the input is ragged.
   FillColumns<process_escapes>(buffer - next_column_start,
         &next_column_start, num_fields, field_locations);
+#endif
 }
-
 }
 
 #endif

@@ -63,12 +63,28 @@ class StopWatch {
   }
 
   static uint64_t Rdtsc() {
+  #if defined(__x86_64__) || defined(__amd64__)
     uint32_t lo, hi;
     __asm__ __volatile__ (
       "xorl %%eax,%%eax \n        cpuid"
       ::: "%rax", "%rbx", "%rcx", "%rdx");
     __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
     return (uint64_t)hi << 32 | lo;
+  #elif defined(__powerpc__) || defined(__ppc__)
+   #warning "On POWER, we do not have cpuid instruction. TODO:: Fix this!"
+    // This returns a time-base, which is not always precisely a cycle-count.
+
+    __asm__ __volatile__ ("sync" : : : "memory");
+    int64 tbl, tbu0, tbu1;
+
+    asm("mftbu %0" : "=r" (tbu0));
+    asm("mftb  %0" : "=r" (tbl));
+    asm("mftbu %0" : "=r" (tbu1));
+    tbl &= -static_cast<int64>(tbu0 == tbu1);
+    // high 32 bits in tbu1; low 32 bits in tbl  (tbu0 is garbage)
+    return (tbu1 << 32) | tbl;
+
+ #endif
   }
 
  private:

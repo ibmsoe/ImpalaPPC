@@ -390,8 +390,8 @@ Function* CodegenCrcHash(LlvmCodeGen* codegen, bool mixed) {
         data, codegen->GetIntConstant(TYPE_INT, fixed_byte_size));
     Value* string_val =
         builder.CreateBitCast(string_data, codegen->GetPtrType(TYPE_STRING));
-    Value* str_ptr = builder.CreateStructGEP(string_val, 0);
-    Value* str_len = builder.CreateStructGEP(string_val, 1);
+    Value* str_ptr = builder.CreateStructGEP(nullptr, string_val, 0);
+    Value* str_len = builder.CreateStructGEP(nullptr, string_val, 1);
     str_ptr = builder.CreateLoad(str_ptr);
     str_len = builder.CreateLoad(str_len);
     seed = builder.CreateCall3(string_hash_fn, str_ptr, str_len, seed);

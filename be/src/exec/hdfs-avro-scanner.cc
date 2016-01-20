@@ -718,8 +718,8 @@ Status HdfsAvroScanner::CodegenReadRecord(
           codegen->GetFunction(IRFunction::READ_UNION_TYPE);
       Value* null_union_pos_val =
           codegen->GetIntConstant(TYPE_INT, field->null_union_position);
-      Value* is_not_null_val = builder->CreateCall3(
-          read_union_fn, this_val, null_union_pos_val, data_val, "is_not_null");
+      Value* is_not_null_val = builder->CreateCall(
+          read_union_fn, {this_val, null_union_pos_val, data_val}, "is_not_null");
       builder->CreateCondBr(is_not_null_val, read_field_block, null_block);
 
       // Write null field IR
@@ -807,7 +807,7 @@ Status HdfsAvroScanner::CodegenReadScalar(const AvroSchemaElement& element,
       slot_type_val = builder->getInt32(slot_desc->type().type);
     }
     Value* slot_val =
-        builder->CreateStructGEP(tuple_val, slot_desc->field_idx(), "slot");
+        builder->CreateStructGEP(nullptr, tuple_val, slot_desc->field_idx(), "slot");
     opaque_slot_val =
         builder->CreateBitCast(slot_val, codegen->ptr_type(), "opaque_slot");
   }

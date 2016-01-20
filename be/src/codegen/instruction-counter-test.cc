@@ -20,7 +20,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/PassManager.h"
 #include "llvm/IR/CallingConv.h"
-#include "llvm/Analysis/Verifier.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Assembly/PrintModulePass.h"
 #include "llvm/IR/IRBuilder.h"
 

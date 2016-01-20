@@ -38,11 +38,11 @@ PROJECT(ASSEMBLER)
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wall -Wno-sign-compare -Wno-unknown-pragmas -pthread")
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -fno-strict-aliasing")
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wno-deprecated")
-SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG")
+SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG -mvsx")
 
 # On Apple we build with clang and need libstdc++ instead of libc++
 if (APPLE)
-  SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -stdlib=libstdc++")
+  SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -stdlib=libstdc++ ")
 endif()
 
 SET(CXX_COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage")
@@ -345,7 +345,11 @@ list(REMOVE_ITEM UDF_TEST_LINK_LIBS Udf)
 set (IMPALA_TEST_LINK_LIBS ${IMPALA_LINK_LIBS} gtest)
 set (UDF_TEST_LINK_LIBS ${UDF_TEST_LINK_LIBS} gtest)
 
-MESSAGE(STATUS "Compiler Flags: ${CMAKE_CXX_FLAGS}")
+MESSAGE(STATUS "CMake CXX Compiler Flags: ${CMAKE_CXX_FLAGS}\n\n")
+MESSAGE(STATUS "LLVM Flags: ${LLVM_CFLAGS}\n\n")
+MESSAGE(STATUS "Clang Compiler Flags: ${CLANG_IR_CXX_FLAGS}\n\n")
+
+
 
 if (CMAKE_DEBUG)
   MESSAGE(STATUS "Linker Libs: ${IMPALA_LINK_LIBS}")

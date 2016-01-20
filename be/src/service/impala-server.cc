@@ -344,21 +344,21 @@ ImpalaServer::ImpalaServer(ExecEnv* exec_env)
   cancellation_thread_pool_.reset(new ThreadPool<CancellationWork>(
           "impala-server", "cancellation-worker",
       FLAGS_cancellation_thread_pool_size, MAX_CANCELLATION_QUEUE_SIZE,
-      bind<void>(&ImpalaServer::CancelFromThreadPool, this, _1, _2)));
+      bind<void>(mem_fn(&ImpalaServer::CancelFromThreadPool), this, _1, _2)));
 
   // Initialize a session expiry thread which blocks indefinitely until the first session
   // with non-zero timeout value is opened. Note that a session which doesn't specify any
   // idle session timeout value will use the default value FLAGS_idle_session_timeout.
   session_timeout_thread_.reset(new Thread("impala-server", "session-expirer",
-      bind<void>(&ImpalaServer::ExpireSessions, this)));
+      bind<void>(mem_fn(&ImpalaServer::ExpireSessions), this)));
 
   query_expiration_thread_.reset(new Thread("impala-server", "query-expirer",
-      bind<void>(&ImpalaServer::ExpireQueries, this)));
+      bind<void>(mem_fn(&ImpalaServer::ExpireQueries), this)));
 
   is_offline_ = false;
   if (FLAGS_enable_rm) {
     nm_failure_detection_thread_.reset(new Thread("impala-server", "nm-failure-detector",
-            bind<void>(&ImpalaServer::DetectNmFailures, this)));
+            bind<void>(mem_fn(&ImpalaServer::DetectNmFailures), this)));
   }
 
   exec_env_->SetImpalaServer(this);

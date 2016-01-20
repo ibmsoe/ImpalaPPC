@@ -16,7 +16,14 @@
 #ifndef IMPALA_UTIL_SSE_UTIL_H
 #define IMPALA_UTIL_SSE_UTIL_H
 
+#ifdef __ALTIVEC__
+#define VECLIB_VSX
+#warning "Skipping SSE2 instructions for PPC TODO:: Fix this!!!!"
+#include "util/veclib_types.h"
+#include <altivec.h>
+#elif __SSE2__
 #include <emmintrin.h>
+#endif
 
 namespace impala {
 
@@ -86,6 +93,7 @@ namespace SSEUtil {
 /// mode constant into the inline asm.
 #define SSE_ALWAYS_INLINE inline __attribute__ ((__always_inline__))
 
+//#if defined(__SSE2__)
 template<int MODE>
 static inline __m128i SSE4_cmpestrm(__m128i str1, int len1, __m128i str2, int len2) {
   /// Use asm reg rather than Yz output constraint to workaround LLVM bug 13199 -
@@ -119,7 +127,7 @@ static inline int64_t POPCNT_popcnt_u64(uint64_t a) {
   __asm__("popcntq %1, %0" : "=r"(result) : "mr"(a) : "cc");
   return result;
 }
-
+//#endif
 #undef SSE_ALWAYS_INLINE
 
 #elif defined(__SSE4_2__) // IR_COMPILE for SSE 4.2.
@@ -152,6 +160,7 @@ static inline int SSE4_cmpestri(
 /// support SSE 4.2.  However, because the caller isn't allowed to call these routines
 /// on CPUs that lack SSE 4.2 anyway, we can implement stubs for this case.
 
+#ifdef __SSE2__
 template<int MODE>
 static inline __m128i SSE4_cmpestrm(__m128i str1, int len1, __m128i str2, int len2) {
   DCHECK(false) << "CPU doesn't support SSE 4.2";
@@ -163,6 +172,8 @@ static inline int SSE4_cmpestri(__m128i str1, int len1, __m128i str2, int len2) 
   DCHECK(false) << "CPU doesn't support SSE 4.2";
   return 0;
 }
+
+#endif
 
 static inline uint32_t SSE4_crc32_u8(uint32_t crc, uint8_t v) {
   DCHECK(false) << "CPU doesn't support SSE 4.2";

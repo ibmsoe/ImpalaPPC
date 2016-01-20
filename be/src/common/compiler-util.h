@@ -33,6 +33,5 @@
 #define UNLIKELY(expr) __builtin_expect(!!(expr), 0)
 
 #define PREFETCH(addr) __builtin_prefetch(addr)
-
 #endif
 

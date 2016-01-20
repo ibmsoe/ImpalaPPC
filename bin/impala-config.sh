@@ -44,9 +44,9 @@ fi
 : ${IMPALA_TOOLCHAIN=$IMPALA_HOME/toolchain}
 : ${USE_SYSTEM_GCC=0}
 
-export USE_SYSTEM_GCC
+export USE_SYSTEM_GCC=1
 export IMPALA_TOOLCHAIN
-export DISABLE_IMPALA_TOOLCHAIN
+export DISABLE_IMPALA_TOOLCHAIN=1
 
 export CDH_MAJOR_VERSION=5
 export HADOOP_LZO=${HADOOP_LZO-$IMPALA_HOME/../hadoop-lzo}
@@ -136,7 +136,7 @@ export IMPALA_GFLAGS_VERSION=2.0
 export IMPALA_GLOG_VERSION=0.3.2
 export IMPALA_GPERFTOOLS_VERSION=2.0
 export IMPALA_GTEST_VERSION=1.6.0
-export IMPALA_LLVM_VERSION=3.3
+export IMPALA_LLVM_VERSION=3.7.0
 export IMPALA_LLVM_ASAN_VERSION=3.7.0
 export IMPALA_LZ4_VERSION=svn
 export IMPALA_MIN_BOOST_VERSION=1.46.0
@@ -151,7 +151,8 @@ export IMPALA_THRIFT_JAVA_VERSION=0.9.0
 export IMPALA_ZLIB_VERSION=1.2.8
 
 # Some of the variables need to be overwritten to explicitely mark the patch level
-if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
+#if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
+if [[ $DISABLE_IMPALA_TOOLCHAIN == 0 ]]; then
   IMPALA_AVRO_VERSION+=-p3
   IMPALA_BZIP2_VERSION+=-p1
   IMPALA_GLOG_VERSION+=-p1
@@ -249,9 +250,12 @@ export AUX_CLASSPATH=$AUX_CLASSPATH:$HBASE_HOME/lib/hbase-hadoop-compat-${IMPALA
 export HBASE_CONF_DIR=$HIVE_CONF_DIR
 
 # Optionally set the Thrift home to the toolchain
-if [[ -z $IMPALA_TOOLCHAIN ]]; then
+ 
+echo "Value of disable toolchain $DISABLE_IMPALA_TOOLCHAIN "
+#if [[ -z $IMPALA_TOOLCHAIN ]]; then
+if [[ $DISABLE_IMPALA_TOOLCHAIN == 1 ]]; then
   THRIFT_SRC_DIR=${IMPALA_HOME}/thirdparty/thrift-${IMPALA_THRIFT_VERSION}
-  export THRIFT_HOME=${THRIFT_SRC_DIR}/build
+  export THRIFT_HOME=${THRIFT_SRC_DIR}
 else
   export THRIFT_HOME=${IMPALA_TOOLCHAIN}/thrift-${IMPALA_THRIFT_VERSION}
 fi

@@ -256,14 +256,14 @@ Function* CodegenStringTest(LlvmCodeGen* codegen) {
   Function* interop_fn = prototype.GeneratePrototype(&builder, &str);
 
   // strval->ptr[0] = 'A'
-  Value* str_ptr = builder.CreateStructGEP(str, 0, "str_ptr");
+  Value* str_ptr = builder.CreateStructGEP(nullptr, str, 0, "str_ptr");
   Value* ptr = builder.CreateLoad(str_ptr, "ptr");
   Value* first_char_offset[] = { codegen->GetIntConstant(TYPE_INT, 0) };
   Value* first_char_ptr = builder.CreateGEP(ptr, first_char_offset, "first_char_ptr");
   builder.CreateStore(codegen->GetIntConstant(TYPE_TINYINT, 'A'), first_char_ptr);
 
   // Update and return old len
-  Value* len_ptr = builder.CreateStructGEP(str, 1, "len_ptr");
+  Value* len_ptr = builder.CreateStructGEP(nullptr, str, 1, "len_ptr");
   Value* len = builder.CreateLoad(len_ptr, "len");
   builder.CreateStore(codegen->GetIntConstant(TYPE_INT, 1), len_ptr);
   builder.CreateRet(len);

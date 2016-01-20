@@ -10,12 +10,12 @@
 
 set(SNAPPY_SEARCH_HEADER_PATHS
   ${SNAPPY_ROOT}/include
-  $ENV{IMPALA_HOME}/thirdparty/snappy-1.0.5/build/include
+  $ENV{IMPALA_HOME}/thirdparty/snappy-1.0.5
 )
 
 set(SNAPPY_SEARCH_LIB_PATH
-  ${SNAPPY_ROOT}/lib
-  $ENV{IMPALA_HOME}/thirdparty/snappy-1.0.5/build/lib
+  ${SNAPPY_ROOT}/.libs
+  $ENV{IMPALA_HOME}/thirdparty/snappy-1.0.5/.libs
 )
 
 find_path(SNAPPY_INCLUDE_DIR

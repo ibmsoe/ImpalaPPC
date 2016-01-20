@@ -567,7 +567,7 @@ Function* SlotDescriptor::CodegenIsNull(LlvmCodeGen* codegen, StructType* tuple)
   Value* tuple_ptr;
   Function* fn = prototype.GeneratePrototype(&builder, &tuple_ptr);
 
-  Value* null_byte_ptr = builder.CreateStructGEP(tuple_ptr, byte_offset, "null_byte_ptr");
+  Value* null_byte_ptr = builder.CreateStructGEP(nullptr, tuple_ptr, byte_offset, "null_byte_ptr");
   Value* null_byte = builder.CreateLoad(null_byte_ptr, "null_byte");
   Value* null_mask = builder.CreateAnd(null_byte, mask, "null_mask");
   Value* is_null = builder.CreateICmpNE(null_mask, zero, "is_null");
@@ -602,7 +602,7 @@ Function* SlotDescriptor::CodegenUpdateNull(LlvmCodeGen* codegen,
   Function* fn = prototype.GeneratePrototype(&builder, &tuple_ptr);
 
   Value* null_byte_ptr =
-      builder.CreateStructGEP(
+      builder.CreateStructGEP(nullptr,
           tuple_ptr, null_indicator_offset_.byte_offset, "null_byte_ptr");
   Value* null_byte = builder.CreateLoad(null_byte_ptr, "null_byte");
   Value* result = NULL;

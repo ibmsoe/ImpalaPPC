@@ -44,6 +44,9 @@ DelimitedTextParser::DelimitedTextParser(
   DCHECK(escape_char == '\0' || escape_char != field_delim);
   DCHECK(escape_char == '\0' || escape_char != collection_item_delim);
 
+#ifdef __SSE4_2_
+#warning "TODO: Fix this for PPC!!!"
+
   // Initialize the sse search registers.
   char search_chars[SSEUtil::CHARS_PER_128_BIT_REGISTER];
   memset(search_chars, 0, sizeof(search_chars));
@@ -85,6 +88,7 @@ DelimitedTextParser::DelimitedTextParser(
   xmm_delim_search_ = _mm_loadu_si128(reinterpret_cast<__m128i*>(search_chars));
 
   ParserReset();
+#endif
 }
 
 void DelimitedTextParser::ParserReset() {
@@ -193,9 +197,11 @@ Status DelimitedTextParser::ParseFieldLocations(int max_tuples, int64_t remainin
 // the previous tuple.
 int DelimitedTextParser::FindFirstInstance(const char* buffer, int len) {
   int tuple_start = 0;
+
+#ifdef __SSE4_2_
+#warning "TODO: Fix this for PPC!!!"
   const char* buffer_start = buffer;
   bool found = false;
-
   // If the last char in the previous buffer was \r then either return the start of
   // this buffer or skip a \n at the beginning of the buffer.
   if (last_row_delim_offset_ != -1) {
@@ -204,6 +210,7 @@ int DelimitedTextParser::FindFirstInstance(const char* buffer, int len) {
   }
 restart:
   found = false;
+
 
   if (CpuInfo::IsSupported(CpuInfo::SSE4_2)) {
     __m128i xmm_buffer, xmm_tuple_mask;
@@ -289,5 +296,6 @@ restart:
     // We have \r\n, move to the next character.
     ++tuple_start;
   }
+#endif
   return tuple_start;
 }

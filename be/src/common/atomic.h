@@ -30,7 +30,12 @@ class AtomicUtil {
   /// should be:
   ///  while (1) CpuWait();
   static inline void CpuWait() {
+  #if defined(__x86_64__)
     asm volatile("pause\n": : :"memory");
+  #elif defined(__powerpc__) || defined(__ppc__)
+    #warning "Revisit at runtime!!! TODO:: Fix this on POWER"
+    asm volatile ("or 1,1,1");
+  #endif
   }
 
   static inline void MemoryBarrier() {

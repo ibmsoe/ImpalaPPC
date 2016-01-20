@@ -208,7 +208,7 @@ hadoop_version_re="^([[:digit:]]+)\.([[:digit:]]+)(\.([[:digit:]]+))?.*$"
 
 if [[ "$HADOOP_VERSION" =~ $hadoop_version_re ]]; then
     hadoop_major_ver=${BASH_REMATCH[1]}
-    hadoop_minor_ver=${BASH_REMATCH[2]}
+    hadoop_minor_ver=${BASH_REMATCH[2]}   
     hadoop_patch_ver=${BASH_REMATCH[4]}
 else
     echo "Unable to determine Hadoop version information."

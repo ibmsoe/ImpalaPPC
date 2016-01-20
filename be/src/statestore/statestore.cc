@@ -256,7 +256,7 @@ void Statestore::RegisterWebpages(Webserver* webserver) {
       topics_callback);
 
   Webserver::UrlCallback subscribers_callback =
-      bind<void>(&Statestore::SubscribersHandler, this, _1, _2);
+      bind<void>(mem_fn(&Statestore::SubscribersHandler), this, _1, _2);
   webserver->RegisterUrlCallback("/subscribers", "statestore_subscribers.tmpl",
       subscribers_callback);
 }

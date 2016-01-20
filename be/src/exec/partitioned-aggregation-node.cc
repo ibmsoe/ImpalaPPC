@@ -1186,7 +1186,7 @@ llvm::Function* PartitionedAggregationNode::CodegenUpdateSlot(
   // Src slot is not null, update dst_slot
   builder.SetInsertPoint(src_not_null_block);
   Value* dst_ptr =
-      builder.CreateStructGEP(agg_tuple_arg, slot_desc->field_idx(), "dst_slot_ptr");
+      builder.CreateStructGEP(nullptr, agg_tuple_arg, slot_desc->field_idx(), "dst_slot_ptr");
   Value* result = NULL;
 
   if (slot_desc->is_nullable()) {
@@ -1261,7 +1261,7 @@ llvm::Function* PartitionedAggregationNode::CodegenUpdateSlot(
           builder.CreateBitCast(dst_lowered_ptr, unlowered_ptr_type, "dst_unlowered_ptr");
 
       // Call 'ir_fn'
-      builder.CreateCall3(ir_fn, fn_ctx_arg, src_unlowered_ptr, dst_unlowered_ptr);
+      builder.CreateCall(ir_fn, {fn_ctx_arg, src_unlowered_ptr, dst_unlowered_ptr});
 
       // Convert StringVal intermediate 'dst_arg' back to StringValue
       Value* anyval_result = builder.CreateLoad(dst_lowered_ptr, "anyval_result");
@@ -1409,7 +1409,7 @@ Function* PartitionedAggregationNode::CodegenUpdateTuple() {
       // increment the slot by the number of rows in the batch.
       int field_idx = slot_desc->field_idx();
       Value* const_one = codegen->GetIntConstant(TYPE_BIGINT, 1);
-      Value* slot_ptr = builder.CreateStructGEP(tuple_arg, field_idx, "src_slot");
+      Value* slot_ptr = builder.CreateStructGEP(nullptr, tuple_arg, field_idx, "src_slot");
       Value* slot_loaded = builder.CreateLoad(slot_ptr, "count_star_val");
       Value* count_inc = builder.CreateAdd(slot_loaded, const_one, "count_star_inc");
       builder.CreateStore(count_inc, slot_ptr);
@@ -1418,7 +1418,7 @@ Function* PartitionedAggregationNode::CodegenUpdateTuple() {
       if (update_slot_fn == NULL) return NULL;
       Value* fn_ctx_ptr = builder.CreateConstGEP1_32(agg_fn_ctxs_arg, i);
       Value* fn_ctx = builder.CreateLoad(fn_ctx_ptr, "fn_ctx");
-      builder.CreateCall3(update_slot_fn, fn_ctx, tuple_arg, row_arg);
+      builder.CreateCall(update_slot_fn, {fn_ctx, tuple_arg, row_arg});
     }
   }
   builder.CreateRetVoid();
