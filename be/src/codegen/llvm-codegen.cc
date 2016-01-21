@@ -28,6 +28,8 @@
 #include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/Linker/Linker.h>
+#include <llvm-c/Linker.h>
+#include <llvm-c/ExecutionEngine.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Host.h>
@@ -174,7 +176,7 @@ Status LlvmCodeGen::LoadModuleFromMemory(LlvmCodeGen* codegen, MemoryBuffer* mod
   SCOPED_TIMER(codegen->prepare_module_timer_);
   string error;
   
-  ErrorOr<Module *> moduleErr = parseBitcodeFile(module_ir, codegen->context());
+  ErrorOr<std::unique_ptr<Module>> moduleErr = parseBitcodeFile(module_ir->getMemBufferRef(), codegen->context());
   if (std::error_code EC = moduleErr.getError()) {
     stringstream ss;
     ss << "Could not parse module " << module_name << ": " << EC.message();
@@ -190,9 +192,9 @@ Status LlvmCodeGen::LinkModule(const string& file) {
   SCOPED_TIMER(profile_.total_time_counter());
   Module* new_module;
   RETURN_IF_ERROR(LoadModuleFromFile(this, file, &new_module));
-  string error_msg;
-  bool error =
-      Linker::LinkModules(module_, new_module, Linker::DestroySource, &error_msg);
+  char *error_msg = nullptr;
+  LLVMBool error =
+      LLVMLinkModules(wrap(module_), wrap(new_module), LLVMLinkerDestroySource, &error_msg);
   if (error) {
     stringstream ss;
     ss << "Problem linking " << file << " to main module: " << error_msg;
@@ -218,7 +220,7 @@ Status LlvmCodeGen::LoadImpalaIR(
         impala_no_sse_llvm_ir_len);
     module_name = "Impala IR with no SSE support";
   }
-  scoped_ptr<MemoryBuffer> module_ir_buf(
+  std::unique_ptr<MemoryBuffer> module_ir_buf(
       MemoryBuffer::getMemBuffer(module_ir, "", false));
   RETURN_IF_ERROR(LoadFromMemory(pool, module_ir_buf.get(), module_name, id,
       codegen_ret));
@@ -294,13 +296,17 @@ Status LlvmCodeGen::Init() {
   // blows up the fe tests (which take ~10-20 ms each).
   opt_level = CodeGenOpt::None;
 #endif
-  EngineBuilder builder = EngineBuilder(module_).setOptLevel(opt_level);
+  EngineBuilder builder(std::unique_ptr<Module>(module_));
+  //builder.setOptLevel(opt_level);
   //TODO Uncomment the below line as soon as we upgrade to LLVM 3.5 to enable SSE, if
   // available. In LLVM 3.3 this is done automatically and cannot be enabled because
   // for some reason SSE4 intrinsics selection will not work.
   //builder.setMCPU(llvm::sys::getHostCPUName());
-  builder.setErrorStr(&error_string_);
-  execution_engine_.reset(builder.create());
+  //builder.setErrorStr(&error_string_);
+  execution_engine_.reset(EngineBuilder(std::unique_ptr<Module>(module_))
+                                 .setOptLevel(opt_level)
+                                 .setErrorStr(&error_string_)
+                                 .create());
   if (execution_engine_ == NULL) {
     // execution_engine_ will take ownership of the module if it is created
     delete module_;
@@ -322,7 +328,8 @@ Status LlvmCodeGen::Init() {
 LlvmCodeGen::~LlvmCodeGen() {
   for (map<Function*, bool>::iterator iter = jitted_functions_.begin();
       iter != jitted_functions_.end(); ++iter) {
-    execution_engine_->freeMachineCodeForFunction(iter->first);
+//    execution_engine_->freeMachineCodeForFunction(iter->first);
+      LLVMFreeMachineCodeForFunction(wrap(execution_engine_.get()), wrap(iter->first));
   }
 }
 
@@ -547,7 +554,9 @@ Function* LlvmCodeGen::ReplaceCallSites(Function* caller, bool update_in_place,
     caller = CloneFunction(caller);
   } else if (jitted_functions_.find(caller) != jitted_functions_.end()) {
     // This function is already dynamically linked, unlink it.
-    execution_engine_->freeMachineCodeForFunction(caller);
+//    execution_engine_->freeMachineCodeForFunction(caller);
+      LLVMFreeMachineCodeForFunction(wrap(execution_engine_.get()), wrap(caller));
+
     jitted_functions_.erase(caller);
   }
 
@@ -724,28 +733,55 @@ void LlvmCodeGen::OptimizeModule() {
   for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
     exported_fn_names.push_back(fns_to_jit_compile_[i].first->getName().data());
   }
+
+/***********************************************************************************
+  scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
+//  module_pass_manager->addPass(new DataLayout(data_layout_str));
+  module_pass_manager->addPass(createInternalizePass(exported_fn_names));
+  module_pass_manager->addPass(createGlobalDCEPass());
+  module_pass_manager->run(*module_);
+
+  // Create and run function pass manager
+  scoped_ptr<llvm::FunctionPassManager> fn_pass_manager(new llvm::FunctionPassManager());
+//  fn_pass_manager->addPass(new DataLayout(data_layout_str));
+//  pass_builder.populateFunctionPassManager(*fn_pass_manager);
+//  fn_pass_manager->doInitialization();
+  for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
+    if (!it->isDeclaration()) fn_pass_manager->run(*it);
+  }
+//  fn_pass_manager->doFinalization();
+
+  // Create and run module pass manager
+  module_pass_manager.reset(new ModulePassManager());
+//  module_pass_manager->addPass(new DataLayout(data_layout_str));
+// TODO: Check this at runtime
+//  pass_builder.populateModulePassManager(*module_pass_manager);
+  module_pass_manager->run(*module_); */
+
+/***********************************************************************************/
+
   scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
   module_pass_manager->addPass(new DataLayout(data_layout_str));
   module_pass_manager->addPass(createInternalizePass(exported_fn_names));
   module_pass_manager->addPass(createGlobalDCEPass());
-  module_pass_manager->run(module_);
+  module_pass_manager->run(*module_);
 
   // Create and run function pass manager
-  scoped_ptr<llvm::FunctionPassManager> fn_pass_manager(new llvm::FunctionPassManager());
+  scoped_ptr<FunctionPassManager> fn_pass_manager(new FunctionPassManager(module_));
   fn_pass_manager->addPass(new DataLayout(data_layout_str));
-  pass_builder.populateFunctionPassManager(*fn_pass_manager);
-  fn_pass_manager->doInitialization();
+//  pass_builder.populateFunctionPassManager(*fn_pass_manager);
+//  fn_pass_manager->doInitialization();
   for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
-    if (!it->isDeclaration()) fn_pass_manager->run(it);
+    if (!it->isDeclaration()) fn_pass_manager->run(*it);
   }
-  fn_pass_manager->doFinalization();
+//  fn_pass_manager->doFinalization();
 
   // Create and run module pass manager
   module_pass_manager.reset(new ModulePassManager());
   module_pass_manager->addPass(new DataLayout(data_layout_str));
-// TODO: Check this at runtime
-  pass_builder.populateModulePassManager(*module_pass_manager);
-  module_pass_manager->run(module_);
+//  pass_builder.populateModulePassManager(*module_pass_manager);
+  module_pass_manager->run(*module_);
+
   if (FLAGS_print_llvm_ir_instruction_count) {
     for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
       InstructionCounter counter;
@@ -1075,7 +1111,7 @@ Function* LlvmCodeGen::GetHashFunction(int num_bytes) {
       while (num_bytes >= 8) {
         Value* index[] = { GetIntConstant(TYPE_INT, i++) };
         Value* d = builder.CreateLoad(builder.CreateGEP(ptr, index));
-        result_64 = builder.CreateCall2(crc64_fn, result_64, d);
+        result_64 = builder.CreateCall(crc64_fn, {result_64, d});
         num_bytes -= 8;
       }
       result = builder.CreateTrunc(result_64, GetType(TYPE_INT));
@@ -1088,7 +1124,7 @@ Function* LlvmCodeGen::GetHashFunction(int num_bytes) {
       DCHECK_LT(num_bytes, 8);
       Value* ptr = builder.CreateBitCast(data, GetPtrType(TYPE_INT));
       Value* d = builder.CreateLoad(ptr);
-      result = builder.CreateCall2(crc32_fn, result, d);
+      result = builder.CreateCall(crc32_fn, {result, d});
       Value* index[] = { GetIntConstant(TYPE_INT, 4) };
       data = builder.CreateGEP(data, index);
       num_bytes -= 4;
@@ -1098,7 +1134,7 @@ Function* LlvmCodeGen::GetHashFunction(int num_bytes) {
       DCHECK_LT(num_bytes, 4);
       Value* ptr = builder.CreateBitCast(data, GetPtrType(TYPE_SMALLINT));
       Value* d = builder.CreateLoad(ptr);
-      result = builder.CreateCall2(crc16_fn, result, d);
+      result = builder.CreateCall(crc16_fn, {result, d});
       Value* index[] = { GetIntConstant(TYPE_INT, 2) };
       data = builder.CreateGEP(data, index);
       num_bytes -= 2;
@@ -1107,7 +1143,7 @@ Function* LlvmCodeGen::GetHashFunction(int num_bytes) {
     if (num_bytes > 0) {
       DCHECK_EQ(num_bytes, 1);
       Value* d = builder.CreateLoad(data);
-      result = builder.CreateCall2(crc8_fn, result, d);
+      result = builder.CreateCall(crc8_fn, {result, d});
       --num_bytes;
     }
     DCHECK_EQ(num_bytes, 0);
