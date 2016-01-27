@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include "codegen/llvm-codegen.h"
-
+#include <llvm/IR/LegacyPassManager.h>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -41,6 +40,7 @@
 #include <system_error>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Transforms/IPO.h>
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -736,30 +736,31 @@ void LlvmCodeGen::OptimizeModule() {
 
 /***********************************************************************************
   scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
-//  module_pass_manager->addPass(new DataLayout(data_layout_str));
+  module_pass_manager->addPass(new DataLayout(data_layout_str));
   module_pass_manager->addPass(createInternalizePass(exported_fn_names));
   module_pass_manager->addPass(createGlobalDCEPass());
   module_pass_manager->run(*module_);
 
   // Create and run function pass manager
   scoped_ptr<llvm::FunctionPassManager> fn_pass_manager(new llvm::FunctionPassManager());
-//  fn_pass_manager->addPass(new DataLayout(data_layout_str));
-//  pass_builder.populateFunctionPassManager(*fn_pass_manager);
-//  fn_pass_manager->doInitialization();
+  fn_pass_manager->addPass(new DataLayout(data_layout_str));
+  pass_builder.populateFunctionPassManager(*fn_pass_manager);
+  fn_pass_manager->doInitialization();
   for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
     if (!it->isDeclaration()) fn_pass_manager->run(*it);
   }
-//  fn_pass_manager->doFinalization();
+  fn_pass_manager->doFinalization();
 
   // Create and run module pass manager
   module_pass_manager.reset(new ModulePassManager());
-//  module_pass_manager->addPass(new DataLayout(data_layout_str));
+  module_pass_manager->addPass(new DataLayout(data_layout_str));
 // TODO: Check this at runtime
-//  pass_builder.populateModulePassManager(*module_pass_manager);
+  pass_builder.populateModulePassManager(*module_pass_manager);
   module_pass_manager->run(*module_); */
 
 /***********************************************************************************/
 
+/******************** Using new PassManagers ****************************************
   scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
   module_pass_manager->addPass(new DataLayout(data_layout_str));
   module_pass_manager->addPass(createInternalizePass(exported_fn_names));
@@ -780,7 +781,32 @@ void LlvmCodeGen::OptimizeModule() {
   module_pass_manager.reset(new ModulePassManager());
   module_pass_manager->addPass(new DataLayout(data_layout_str));
 //  pass_builder.populateModulePassManager(*module_pass_manager);
+  module_pass_manager->run(*module_);*/
+
+/***********************************************************************************/
+
+  scoped_ptr<legacy::PassManager> module_pass_manager(new legacy::PassManager());
+  //module_pass_manager->add(new DataLayout(data_layout_str));
+  module_pass_manager->add(createInternalizePass(exported_fn_names));
+  module_pass_manager->add(createGlobalDCEPass());
   module_pass_manager->run(*module_);
+
+  // Create and run function pass manager
+  scoped_ptr<legacy::FunctionPassManager> fn_pass_manager(new legacy::FunctionPassManager(module_));
+  //fn_pass_manager->add(new DataLayout(data_layout_str));
+  pass_builder.populateFunctionPassManager(*fn_pass_manager);
+  fn_pass_manager->doInitialization();
+  for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
+    if (!it->isDeclaration()) fn_pass_manager->run(*it);
+  }
+  fn_pass_manager->doFinalization();
+
+  // Create and run module pass manager
+  module_pass_manager.reset(new legacy::PassManager());
+//  module_pass_manager->add(new DataLayout(data_layout_str));
+  pass_builder.populateModulePassManager(*module_pass_manager);
+  module_pass_manager->run(*module_);
+
 
   if (FLAGS_print_llvm_ir_instruction_count) {
     for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
