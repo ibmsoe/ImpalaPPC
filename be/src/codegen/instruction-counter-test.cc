@@ -18,10 +18,10 @@
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
-#include "llvm/PassManager.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Assembly/PrintModulePass.h"
+//#include "llvm/Assembly/PrintModulePass.h"
 #include "llvm/IR/IRBuilder.h"
 
 #include "codegen/llvm-codegen.h"

@@ -399,9 +399,9 @@ TEST_F(LlvmCodeGenTest, HashTest) {
     ASSERT_TRUE(generic_hash_fn != NULL);
 
     Value* seed = codegen->GetIntConstant(TYPE_INT, 0);
-    seed = builder.CreateCall3(data1_hash_fn, llvm_data1, llvm_len1, seed);
-    seed = builder.CreateCall3(data2_hash_fn, llvm_data2, llvm_len2, seed);
-    seed = builder.CreateCall3(generic_hash_fn, llvm_data1, llvm_len1, seed);
+    seed = builder.CreateCall(data1_hash_fn, {llvm_data1, llvm_len1, seed});
+    seed = builder.CreateCall(data2_hash_fn, {llvm_data2, llvm_len2, seed});
+    seed = builder.CreateCall(generic_hash_fn, {llvm_data1, llvm_len1, seed});
     builder.CreateRet(seed);
 
     fn_fixed = codegen->FinalizeFunction(fn_fixed);
