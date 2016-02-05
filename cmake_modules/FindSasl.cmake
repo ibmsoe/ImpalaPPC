@@ -27,8 +27,8 @@ find_library(SASL_STATIC_LIBRARY NAMES libsasl2.a
         DOC   "Cyrus-sasl library"
 )
 
-set(SASL_INCLUDE_DIR /usr/include/)
-set(SASL_STATIC_LIBRARY /usr/lib/powerpc64le-linux-gnu/libsasl2.a)
+set(SASL_INCLUDE_DIR /usr/local/include/)
+set(SASL_STATIC_LIBRARY /usr/local/lib/libsasl2.a)
 
 if (NOT SASL_STATIC_LIBRARY OR NOT SASL_INCLUDE_DIR)
   set(SASL_FOUND FALSE)

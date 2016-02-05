@@ -288,14 +288,15 @@ set (IMPALA_LINK_LIBS ${IMPALA_LINK_LIBS}
   ${RE2_STATIC_LIB}
   ${Boost_LIBRARIES}
   ${LLVM_MODULE_LIBS}
+  -lncurses
   thriftstatic
   ${SASL_LIBRARY}
   ${LDAP_LIBRARY}
   ${LBER_LIBRARY}
   ThriftSaslTransport
   gutil
-  glogstatic
   gflagsstatic
+  glogstatic
   pprofstatic
   ${HDFS_LIB}
   ${LIBZ}

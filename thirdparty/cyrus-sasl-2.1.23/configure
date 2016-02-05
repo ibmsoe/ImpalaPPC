@@ -663,8 +663,12 @@ LIB_PGSQL
 LIB_MYSQL
 PASSDSS_LIBS
 NTLM_LIBS
+GSSAPIBASE_LIBS
+GSSAPI_LIBS
+LIB_CRYPT
 SRP_LIBS
 OTP_LIBS
+CMU_LIB_SUBDIR
 LIB_DOOR
 IPCTYPE
 PWCHECK_FALSE
@@ -675,6 +679,13 @@ SASLAUTHD_TRUE
 SASL_DL_LIB
 NO_SASL_DB_MANS_FALSE
 NO_SASL_DB_MANS_TRUE
+SASL_DB_LIB
+SASL_DB_INC
+SASL_DB_BACKEND_STATIC
+SASL_DB_BACKEND
+SASL_DB_MANS
+SASL_DB_UTILS
+LIB_SOCKET
 SAMPLE_FALSE
 SAMPLE_TRUE
 JAVAROOT
@@ -822,6 +833,11 @@ with_purecov
 with_purify
 enable_java
 with_javabase
+with_dbpath
+with_dblib
+with_bdb_libdir
+with_bdb_incdir
+with_gdbm
 enable_keep_db_open
 with_devrandom
 with_pam
@@ -832,11 +848,15 @@ with_ipctype
 enable_alwaystrue
 enable_checkapop
 enable_cram
+with_lib_subdir
+with_openssl
 enable_digest
 enable_otp
 with_with_opie
 enable_srp
 enable_srp_setpass
+enable_gssapi
+with_gss_impl
 enable_gss_mutexes
 enable_anon
 enable_login
@@ -1504,6 +1524,7 @@ Optional Features:
   --enable-otp            enable OTP authentication [yes]
   --enable-srp            enable SRP authentication [no]
   --enable-srp-setpass    enable setting SRP secrets with saslpasswd [no]
+  --enable-gssapi=<DIR>   enable GSSAPI authentication [yes]
   --enable-gss_mutexes     use mutexes around calls to the GSS library
   --enable-anon           enable ANONYMOUS authentication [yes]
   --enable-login          enable unsupported LOGIN authentication [no]
@@ -1525,13 +1546,22 @@ Optional Packages:
   --with-purecov          link with purecov
   --with-purify           link with purify
   --with-javabase=PATH    set path to find jni.h in /usr/java/include
+  --with-dbpath=PATH      set the DB path to use /etc/sasldb2
+  --with-dblib=DBLIB      set the DB library to use berkeley
+  --with-bdb-libdir=DIR   Berkeley DB lib files are in DIR
+  --with-bdb-incdir=DIR   Berkeley DB include files are in DIR
+  --with-gdbm=PATH        use gdbm from PATH
   --with-devrandom=PATH   set the path to /dev/random [/dev/random]
   --with-pam=DIR          use PAM (rooted in DIR) [yes]
   --with-saslauthd=DIR    enable use of the saslauth daemon using state dir DIR
   --with-authdaemond=PATH enable use of authdaemon with default socket=PATH [yes]
   --with-pwcheck=DIR     enable deprecated pwcheck daemon using statedir DIR
   --with-ipctype={unix,doors}    use ipctype [unix]
+  --with-lib-subdir=DIR   Find libraries in DIR instead of lib
+  --with-openssl=PATH     use OpenSSL from PATH
   --with-opie=PATH        use OPIE (One Time Passwords in Everything) from PATH
+  --with-gss_impl={heimdal|mit|cybersafe|seam|auto}
+                          choose specific GSSAPI implementation [[auto]]
   --with-ldap=DIR         use LDAP (in DIR) for saslauthd no
   --with-mysql=PATH       use MySQL from PATH
   --with-pgsql=PATH       use PostgreSQL from PATH
@@ -1982,6 +2012,189 @@ fi
 
 } # ac_fn_c_check_header_mongrel
 
+# ac_fn_c_compute_int LINENO EXPR VAR INCLUDES
+# --------------------------------------------
+# Tries to find the compile-time value of EXPR in a program that includes
+# INCLUDES, setting VAR accordingly. Returns whether the value could be
+# computed
+ac_fn_c_compute_int ()
+{
+  as_lineno=${as_lineno-"$1"} as_lineno_stack=as_lineno_stack=$as_lineno_stack
+  if test "$cross_compiling" = yes; then
+    # Depending upon the size, compute the lo and hi bounds.
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+$4
+int
+main ()
+{
+static int test_array [1 - 2 * !(($2) >= 0)];
+test_array [0] = 0;
+return test_array [0];
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_lo=0 ac_mid=0
+  while :; do
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+$4
+int
+main ()
+{
+static int test_array [1 - 2 * !(($2) <= $ac_mid)];
+test_array [0] = 0;
+return test_array [0];
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_hi=$ac_mid; break
+else
+  as_fn_arith $ac_mid + 1 && ac_lo=$as_val
+			if test $ac_lo -le $ac_mid; then
+			  ac_lo= ac_hi=
+			  break
+			fi
+			as_fn_arith 2 '*' $ac_mid + 1 && ac_mid=$as_val
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  done
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+$4
+int
+main ()
+{
+static int test_array [1 - 2 * !(($2) < 0)];
+test_array [0] = 0;
+return test_array [0];
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_hi=-1 ac_mid=-1
+  while :; do
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+$4
+int
+main ()
+{
+static int test_array [1 - 2 * !(($2) >= $ac_mid)];
+test_array [0] = 0;
+return test_array [0];
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_lo=$ac_mid; break
+else
+  as_fn_arith '(' $ac_mid ')' - 1 && ac_hi=$as_val
+			if test $ac_mid -le $ac_hi; then
+			  ac_lo= ac_hi=
+			  break
+			fi
+			as_fn_arith 2 '*' $ac_mid && ac_mid=$as_val
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  done
+else
+  ac_lo= ac_hi=
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+# Binary search between lo and hi bounds.
+while test "x$ac_lo" != "x$ac_hi"; do
+  as_fn_arith '(' $ac_hi - $ac_lo ')' / 2 + $ac_lo && ac_mid=$as_val
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+$4
+int
+main ()
+{
+static int test_array [1 - 2 * !(($2) <= $ac_mid)];
+test_array [0] = 0;
+return test_array [0];
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_hi=$ac_mid
+else
+  as_fn_arith '(' $ac_mid ')' + 1 && ac_lo=$as_val
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+done
+case $ac_lo in #((
+?*) eval "$3=\$ac_lo"; ac_retval=0 ;;
+'') ac_retval=1 ;;
+esac
+  else
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+$4
+static long int longval () { return $2; }
+static unsigned long int ulongval () { return $2; }
+#include <stdio.h>
+#include <stdlib.h>
+int
+main ()
+{
+
+  FILE *f = fopen ("conftest.val", "w");
+  if (! f)
+    return 1;
+  if (($2) < 0)
+    {
+      long int i = longval ();
+      if (i != ($2))
+	return 1;
+      fprintf (f, "%ld", i);
+    }
+  else
+    {
+      unsigned long int i = ulongval ();
+      if (i != ($2))
+	return 1;
+      fprintf (f, "%lu", i);
+    }
+  /* Do not output a trailing newline, as this causes \r\n confusion
+     on some platforms.  */
+  return ferror (f) || fclose (f) != 0;
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_run "$LINENO"; then :
+  echo >>conftest.val; read $3 <conftest.val; ac_retval=0
+else
+  ac_retval=1
+fi
+rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
+  conftest.$ac_objext conftest.beam conftest.$ac_ext
+rm -f conftest.val
+
+  fi
+  eval $as_lineno_stack; ${as_lineno_stack:+:} unset as_lineno
+  as_fn_set_status $ac_retval
+
+} # ac_fn_c_compute_int
+
 # ac_fn_c_check_type LINENO TYPE VAR INCLUDES
 # -------------------------------------------
 # Tests whether TYPE exists after having included INCLUDES, setting cache
@@ -2410,6 +2623,7 @@ $as_echo "$as_me: creating cache $cache_file" >&6;}
 fi
 
 fi
+
 
 ac_aux_dir=
 for ac_dir in config "$srcdir"/config; do
@@ -3131,7 +3345,10 @@ END
   fi
 fi
 
-CMU_INIT_AUTOMAKE
+
+
+	ACLOCAL="$ACLOCAL -I \$(top_srcdir)/cmulocal"
+
 
 # and include our config dir scripts
 ACLOCAL="$ACLOCAL -I \$(top_srcdir)/config"
@@ -4413,9 +4630,106 @@ $as_echo "no" >&6; }
 fi
 
 
-CMU_C___ATTRIBUTE__
 
-CMU_GUESS_RUNPATH_SWITCH
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for __attribute__" >&5
+$as_echo_n "checking for __attribute__... " >&6; }
+if ${ac_cv___attribute__+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <stdlib.h>
+
+int
+main ()
+{
+
+static void foo(void) __attribute__ ((noreturn));
+
+static void
+foo(void)
+{
+  exit(1);
+}
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ac_cv___attribute__=yes
+else
+  ac_cv___attribute__=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+
+if test "$ac_cv___attribute__" = "yes"; then
+
+$as_echo "#define HAVE___ATTRIBUTE__ 1" >>confdefs.h
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv___attribute__" >&5
+$as_echo "$ac_cv___attribute__" >&6; }
+
+
+
+   # CMU GUESS RUNPATH SWITCH
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for runpath switch" >&5
+$as_echo_n "checking for runpath switch... " >&6; }
+if ${andrew_runpath_switch+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    # first, try -R
+    SAVE_LDFLAGS="${LDFLAGS}"
+    LDFLAGS="-R /usr/lib"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  andrew_runpath_switch="-R"
+else
+
+  	LDFLAGS="-Wl,-rpath,/usr/lib"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  andrew_runpath_switch="-Wl,-rpath,"
+else
+  andrew_runpath_switch="none"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  LDFLAGS="${SAVE_LDFLAGS}"
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $andrew_runpath_switch" >&5
+$as_echo "$andrew_runpath_switch" >&6; }
 
 
 # Check whether --with-staticsasl was given.
@@ -5963,7 +6277,6 @@ fi
 $as_echo "$lt_cv_sharedlib_from_linklib_cmd" >&6; }
 sharedlib_from_linklib_cmd=$lt_cv_sharedlib_from_linklib_cmd
 test -z "$sharedlib_from_linklib_cmd" && sharedlib_from_linklib_cmd=$ECHO
-
 
 
 
@@ -8265,6 +8578,10 @@ _lt_linker_boilerplate=`cat conftest.err`
 $RM -r conftest*
 
 
+## CAVEAT EMPTOR:
+## There is no encapsulation within the following macros, do not change
+## the running order or otherwise move them around unless you know exactly
+## what you are doing...
 if test -n "$compiler"; then
 
 lt_prog_compiler_no_builtin_flag=
@@ -12145,10 +12462,722 @@ else
 fi
 
 
-CMU_SOCKETS
 
-SASL_DB_PATH_CHECK()
-SASL_DB_CHECK()
+	save_LIBS="$LIBS"
+	LIB_SOCKET=""
+	ac_fn_c_check_func "$LINENO" "connect" "ac_cv_func_connect"
+if test "x$ac_cv_func_connect" = xyes; then :
+  :
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gethostbyname in -lnsl" >&5
+$as_echo_n "checking for gethostbyname in -lnsl... " >&6; }
+if ${ac_cv_lib_nsl_gethostbyname+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnsl  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gethostbyname ();
+int
+main ()
+{
+return gethostbyname ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nsl_gethostbyname=yes
+else
+  ac_cv_lib_nsl_gethostbyname=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nsl_gethostbyname" >&5
+$as_echo "$ac_cv_lib_nsl_gethostbyname" >&6; }
+if test "x$ac_cv_lib_nsl_gethostbyname" = xyes; then :
+  LIB_SOCKET="-lnsl $LIB_SOCKET"
+fi
+
+		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for connect in -lsocket" >&5
+$as_echo_n "checking for connect in -lsocket... " >&6; }
+if ${ac_cv_lib_socket_connect+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lsocket  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char connect ();
+int
+main ()
+{
+return connect ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_socket_connect=yes
+else
+  ac_cv_lib_socket_connect=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_socket_connect" >&5
+$as_echo "$ac_cv_lib_socket_connect" >&6; }
+if test "x$ac_cv_lib_socket_connect" = xyes; then :
+  LIB_SOCKET="-lsocket $LIB_SOCKET"
+fi
+
+
+fi
+
+	LIBS="$LIB_SOCKET $save_LIBS"
+	ac_fn_c_check_func "$LINENO" "res_search" "ac_cv_func_res_search"
+if test "x$ac_cv_func_res_search" = xyes; then :
+  :
+else
+  LIBS="-lresolv $LIB_SOCKET $save_LIBS"
+		cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/nameser.h>
+#ifdef HAVE_ARPA_NAMESER_COMPAT_H
+#include <arpa/nameser_compat.h>
+#endif
+#include <resolv.h>
+int
+main ()
+{
+
+const char host[12]="openafs.org";
+u_char ans[1024];
+res_search( host, C_IN, T_MX, (u_char *)&ans, sizeof(ans));
+return 0;
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  LIB_SOCKET="-lresolv $LIB_SOCKET"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+
+fi
+
+	LIBS="$LIB_SOCKET $save_LIBS"
+	for ac_func in dn_expand dns_lookup
+do :
+  as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
+ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
+if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
+  cat >>confdefs.h <<_ACEOF
+#define `$as_echo "HAVE_$ac_func" | $as_tr_cpp` 1
+_ACEOF
+
+fi
+done
+
+	LIBS="$save_LIBS"
+
+
+
+
+
+# Check whether --with-dbpath was given.
+if test "${with_dbpath+set}" = set; then :
+  withval=$with_dbpath; dbpath=$withval
+else
+  dbpath=/etc/sasldb2
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking DB path to use" >&5
+$as_echo_n "checking DB path to use... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $dbpath" >&5
+$as_echo "$dbpath" >&6; }
+
+cat >>confdefs.h <<_ACEOF
+#define SASL_DB_PATH "$dbpath"
+_ACEOF
+
+
+cmu_save_LIBS="$LIBS"
+
+# Check whether --with-dblib was given.
+if test "${with_dblib+set}" = set; then :
+  withval=$with_dblib; dblib=$withval
+else
+  dblib=auto_detect
+fi
+
+
+
+
+# Check whether --with-bdb-libdir was given.
+if test "${with_bdb_libdir+set}" = set; then :
+  withval=$with_bdb_libdir; with_bdb_lib=$withval
+else
+   test "${with_bdb_lib+set}" = set || with_bdb_lib=none
+fi
+
+
+# Check whether --with-bdb-incdir was given.
+if test "${with_bdb_incdir+set}" = set; then :
+  withval=$with_bdb_incdir; with_bdb_inc=$withval
+else
+   test "${with_bdb_inc+set}" = set || with_bdb_inc=none
+fi
+
+
+
+SASL_DB_LIB=""
+
+case "$dblib" in
+  berkeley)
+
+
+
+	cmu_save_CPPFLAGS=$CPPFLAGS
+
+	if test -d $with_bdb_inc; then
+	    CPPFLAGS="$CPPFLAGS -I$with_bdb_inc"
+	    BDB_INCADD="-I$with_bdb_inc"
+	else
+	    BDB_INCADD=""
+	fi
+
+	                ac_fn_c_check_header_mongrel "$LINENO" "db.h" "ac_cv_header_db_h" "$ac_includes_default"
+if test "x$ac_cv_header_db_h" = xyes; then :
+
+	BDB_SAVE_LDFLAGS=$LDFLAGS
+
+	if test -d $with_bdb_lib; then
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LDFLAGS="-L$with_bdb_lib ${LDFLAGS}"
+  else
+	LDFLAGS="-L$with_bdb_lib ${LDFLAGS} $andrew_runpath_switch$with_bdb_lib"
+  fi
+
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	BDB_LIBADD="-L$with_bdb_lib ${BDB_LIBADD}"
+  else
+	BDB_LIBADD="-L$with_bdb_lib ${BDB_LIBADD} $andrew_runpath_switch$with_bdb_lib"
+  fi
+
+	else
+	    BDB_LIBADD=""
+	fi
+
+	saved_LIBS=$LIBS
+        for dbname in db-4.4 db4.4 db44 db-4.3 db4.3 db43 db-4.2 db4.2 db42 db-4.1 db4.1 db41 db-4.0 db4.0 db-4 db40 db4 db-3.3 db3.3 db33 db-3.2 db3.2 db32 db-3.1 db3.1 db31 db-3 db30 db3 db
+          do
+	    LIBS="$saved_LIBS -l$dbname"
+	    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <db.h>
+int
+main ()
+{
+db_create(NULL, NULL, 0);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  BDB_LIBADD="$BDB_LIBADD -l$dbname"; dblib="berkeley"; dbname=db
+else
+  dblib="no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+	    if test "$dblib" = "berkeley"; then break; fi
+          done
+        if test "$dblib" = "no"; then
+	    LIBS="$saved_LIBS -ldb"
+	    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <db.h>
+int
+main ()
+{
+db_open(NULL, 0, 0, 0, NULL, NULL, NULL);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  BDB_LIBADD="$BDB_LIBADD -ldb"; dblib="berkeley"; dbname=db
+else
+  dblib="no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+        fi
+	LIBS=$saved_LIBS
+
+	LDFLAGS=$BDB_SAVE_LDFLAGS
+
+else
+  dblib="no"
+fi
+
+
+
+	CPPFLAGS=$cmu_save_CPPFLAGS
+
+	CPPFLAGS="${CPPFLAGS} ${BDB_INCADD}"
+	SASL_DB_INC=$BDB_INCADD
+	SASL_DB_LIB="${BDB_LIBADD}"
+	;;
+  gdbm)
+
+# Check whether --with-gdbm was given.
+if test "${with_gdbm+set}" = set; then :
+  withval=$with_gdbm; with_gdbm="${withval}"
+fi
+
+
+        case "$with_gdbm" in
+           ""|yes)
+               ac_fn_c_check_header_mongrel "$LINENO" "gdbm.h" "ac_cv_header_gdbm_h" "$ac_includes_default"
+if test "x$ac_cv_header_gdbm_h" = xyes; then :
+
+			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gdbm_open in -lgdbm" >&5
+$as_echo_n "checking for gdbm_open in -lgdbm... " >&6; }
+if ${ac_cv_lib_gdbm_gdbm_open+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgdbm  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gdbm_open ();
+int
+main ()
+{
+return gdbm_open ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gdbm_gdbm_open=yes
+else
+  ac_cv_lib_gdbm_gdbm_open=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gdbm_gdbm_open" >&5
+$as_echo "$ac_cv_lib_gdbm_gdbm_open" >&6; }
+if test "x$ac_cv_lib_gdbm_gdbm_open" = xyes; then :
+  SASL_DB_LIB="-lgdbm"
+else
+  dblib="no"
+fi
+
+else
+  dblib="no"
+fi
+
+
+               ;;
+           *)
+               if test -d $with_gdbm; then
+                 CPPFLAGS="${CPPFLAGS} -I${with_gdbm}/include"
+                 LDFLAGS="${LDFLAGS} -L${with_gdbm}/lib"
+                 SASL_DB_LIB="-lgdbm"
+               else
+                 with_gdbm="no"
+               fi
+       esac
+	;;
+  ndbm)
+			ac_fn_c_check_header_mongrel "$LINENO" "ndbm.h" "ac_cv_header_ndbm_h" "$ac_includes_default"
+if test "x$ac_cv_header_ndbm_h" = xyes; then :
+
+			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for dbm_open in -lndbm" >&5
+$as_echo_n "checking for dbm_open in -lndbm... " >&6; }
+if ${ac_cv_lib_ndbm_dbm_open+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lndbm  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char dbm_open ();
+int
+main ()
+{
+return dbm_open ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_ndbm_dbm_open=yes
+else
+  ac_cv_lib_ndbm_dbm_open=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ndbm_dbm_open" >&5
+$as_echo "$ac_cv_lib_ndbm_dbm_open" >&6; }
+if test "x$ac_cv_lib_ndbm_dbm_open" = xyes; then :
+  SASL_DB_LIB="-lndbm"
+else
+
+				ac_fn_c_check_func "$LINENO" "dbm_open" "ac_cv_func_dbm_open"
+if test "x$ac_cv_func_dbm_open" = xyes; then :
+
+else
+  dblib="no"
+fi
+
+fi
+
+else
+  dblib="no"
+fi
+
+
+	;;
+  auto_detect)
+
+
+
+	cmu_save_CPPFLAGS=$CPPFLAGS
+
+	if test -d $with_bdb_inc; then
+	    CPPFLAGS="$CPPFLAGS -I$with_bdb_inc"
+	    BDB_INCADD="-I$with_bdb_inc"
+	else
+	    BDB_INCADD=""
+	fi
+
+	                ac_fn_c_check_header_mongrel "$LINENO" "db.h" "ac_cv_header_db_h" "$ac_includes_default"
+if test "x$ac_cv_header_db_h" = xyes; then :
+
+	BDB_SAVE_LDFLAGS=$LDFLAGS
+
+	if test -d $with_bdb_lib; then
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LDFLAGS="-L$with_bdb_lib ${LDFLAGS}"
+  else
+	LDFLAGS="-L$with_bdb_lib ${LDFLAGS} $andrew_runpath_switch$with_bdb_lib"
+  fi
+
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	BDB_LIBADD="-L$with_bdb_lib ${BDB_LIBADD}"
+  else
+	BDB_LIBADD="-L$with_bdb_lib ${BDB_LIBADD} $andrew_runpath_switch$with_bdb_lib"
+  fi
+
+	else
+	    BDB_LIBADD=""
+	fi
+
+	saved_LIBS=$LIBS
+        for dbname in db-4.4 db4.4 db44 db-4.3 db4.3 db43 db-4.2 db4.2 db42 db-4.1 db4.1 db41 db-4.0 db4.0 db-4 db40 db4 db-3.3 db3.3 db33 db-3.2 db3.2 db32 db-3.1 db3.1 db31 db-3 db30 db3 db
+          do
+	    LIBS="$saved_LIBS -l$dbname"
+	    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <db.h>
+int
+main ()
+{
+db_create(NULL, NULL, 0);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  BDB_LIBADD="$BDB_LIBADD -l$dbname"; dblib="berkeley"; dbname=db
+else
+  dblib="no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+	    if test "$dblib" = "berkeley"; then break; fi
+          done
+        if test "$dblib" = "no"; then
+	    LIBS="$saved_LIBS -ldb"
+	    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <db.h>
+int
+main ()
+{
+db_open(NULL, 0, 0, 0, NULL, NULL, NULL);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  BDB_LIBADD="$BDB_LIBADD -ldb"; dblib="berkeley"; dbname=db
+else
+  dblib="no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+        fi
+	LIBS=$saved_LIBS
+
+	LDFLAGS=$BDB_SAVE_LDFLAGS
+
+else
+  dblib="no"
+fi
+
+
+
+	CPPFLAGS=$cmu_save_CPPFLAGS
+
+	if test "$dblib" = no; then
+	  	  ac_fn_c_check_header_mongrel "$LINENO" "ndbm.h" "ac_cv_header_ndbm_h" "$ac_includes_default"
+if test "x$ac_cv_header_ndbm_h" = xyes; then :
+
+		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for dbm_open in -lndbm" >&5
+$as_echo_n "checking for dbm_open in -lndbm... " >&6; }
+if ${ac_cv_lib_ndbm_dbm_open+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lndbm  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char dbm_open ();
+int
+main ()
+{
+return dbm_open ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_ndbm_dbm_open=yes
+else
+  ac_cv_lib_ndbm_dbm_open=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ndbm_dbm_open" >&5
+$as_echo "$ac_cv_lib_ndbm_dbm_open" >&6; }
+if test "x$ac_cv_lib_ndbm_dbm_open" = xyes; then :
+  dblib="ndbm"; SASL_DB_LIB="-lndbm"
+else
+  dblib="weird"
+fi
+
+else
+  dblib="no"
+fi
+
+
+	  if test "$dblib" = "weird"; then
+	                ac_fn_c_check_func "$LINENO" "dbm_open" "ac_cv_func_dbm_open"
+if test "x$ac_cv_func_dbm_open" = xyes; then :
+  dblib="ndbm"
+else
+  dblib="no"
+fi
+
+	  fi
+
+	  if test "$dblib" = no; then
+               	    ac_fn_c_check_header_mongrel "$LINENO" "gdbm.h" "ac_cv_header_gdbm_h" "$ac_includes_default"
+if test "x$ac_cv_header_gdbm_h" = xyes; then :
+
+		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for gdbm_open in -lgdbm" >&5
+$as_echo_n "checking for gdbm_open in -lgdbm... " >&6; }
+if ${ac_cv_lib_gdbm_gdbm_open+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgdbm  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gdbm_open ();
+int
+main ()
+{
+return gdbm_open ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gdbm_gdbm_open=yes
+else
+  ac_cv_lib_gdbm_gdbm_open=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gdbm_gdbm_open" >&5
+$as_echo "$ac_cv_lib_gdbm_gdbm_open" >&6; }
+if test "x$ac_cv_lib_gdbm_gdbm_open" = xyes; then :
+  dblib="gdbm";
+					     SASL_DB_LIB="-lgdbm"
+else
+  dblib="no"
+fi
+
+else
+  dblib="no"
+fi
+
+
+	  fi
+	else
+	  	  CPPFLAGS="${CPPFLAGS} ${BDB_INCADD}"
+	  SASL_DB_INC=$BDB_INCADD
+          SASL_DB_LIB="${BDB_LIBADD}"
+	fi
+	;;
+  none)
+	;;
+  no)
+	;;
+  *)
+	{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Bad DB library implementation specified;" >&5
+$as_echo "$as_me: WARNING: Bad DB library implementation specified;" >&2;}
+	as_fn_error $? "Use either \"berkeley\", \"gdbm\", \"ndbm\" or \"none\"" "$LINENO" 5
+	dblib=no
+	;;
+esac
+LIBS="$cmu_save_LIBS"
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking DB library to use" >&5
+$as_echo_n "checking DB library to use... " >&6; }
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $dblib" >&5
+$as_echo "$dblib" >&6; }
+
+SASL_DB_BACKEND="db_${dblib}.lo"
+SASL_DB_BACKEND_STATIC="db_${dblib}.o allockey.o"
+SASL_DB_BACKEND_STATIC_SRCS="../sasldb/db_${dblib}.c ../sasldb/allockey.c"
+SASL_DB_UTILS="saslpasswd2 sasldblistusers2"
+SASL_DB_MANS="saslpasswd2.8 sasldblistusers2.8"
+
+case "$dblib" in
+  gdbm)
+    SASL_MECHS="$SASL_MECHS libsasldb.la"
+
+$as_echo "#define SASL_GDBM /**/" >>confdefs.h
+
+    ;;
+  ndbm)
+    SASL_MECHS="$SASL_MECHS libsasldb.la"
+
+$as_echo "#define SASL_NDBM /**/" >>confdefs.h
+
+    ;;
+  berkeley)
+    SASL_MECHS="$SASL_MECHS libsasldb.la"
+
+$as_echo "#define SASL_BERKELEYDB /**/" >>confdefs.h
+
+    ;;
+  *)
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Disabling SASL authentication database support" >&5
+$as_echo "$as_me: WARNING: Disabling SASL authentication database support" >&2;}
+            SASL_DB_BACKEND="db_none.lo"
+    SASL_DB_BACKEND_STATIC="db_none.o"
+    SASL_DB_BACKEND_STATIC_SRCS="../sasldb/db_none.c"
+    SASL_DB_UTILS=""
+    SASL_DB_MANS=""
+    SASL_DB_LIB=""
+    ;;
+esac
+
+if test "$enable_static" = yes; then
+    if test "$dblib" != "none"; then
+      SASL_STATIC_SRCS="$SASL_STATIC_SRCS ../plugins/sasldb.c $SASL_DB_BACKEND_STATIC_SRCS"
+      SASL_STATIC_OBJS="$SASL_STATIC_OBJS sasldb.o $SASL_DB_BACKEND_STATIC"
+
+$as_echo "#define STATIC_SASLDB /**/" >>confdefs.h
+
+    else
+      SASL_STATIC_OBJS="$SASL_STATIC_OBJS $SASL_DB_BACKEND_STATIC"
+      SASL_STATIC_SRCS="$SASL_STATIC_SRCS $SASL_DB_BACKEND_STATIC_SRCS"
+    fi
+fi
+
+
+
+
+
+
+
+
 
 # Do we not install the SASL DB man pages?
  if test "x$SASL_DB_MANS" = "x"; then
@@ -12620,7 +13649,247 @@ else
 $as_echo "disabled" >&6; }
 fi
 
-CMU_HAVE_OPENSSL
+
+# Check whether --with-lib-subdir was given.
+if test "${with_lib_subdir+set}" = set; then :
+  withval=$with_lib_subdir;
+fi
+
+# The cast to long int works around a bug in the HP C Compiler
+# version HP92453-01 B.11.11.23709.GP, which incorrectly rejects
+# declarations like `int a3[[(sizeof (unsigned char)) >= 0]];'.
+# This bug is HP SR number 8606223364.
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking size of long" >&5
+$as_echo_n "checking size of long... " >&6; }
+if ${ac_cv_sizeof_long+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if ac_fn_c_compute_int "$LINENO" "(long int) (sizeof (long))" "ac_cv_sizeof_long"        "$ac_includes_default"; then :
+
+else
+  if test "$ac_cv_type_long" = yes; then
+     { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error 77 "cannot compute sizeof (long)
+See \`config.log' for more details" "$LINENO" 5; }
+   else
+     ac_cv_sizeof_long=0
+   fi
+fi
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_sizeof_long" >&5
+$as_echo "$ac_cv_sizeof_long" >&6; }
+
+
+
+cat >>confdefs.h <<_ACEOF
+#define SIZEOF_LONG $ac_cv_sizeof_long
+_ACEOF
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking what directory libraries are found in" >&5
+$as_echo_n "checking what directory libraries are found in... " >&6; }
+if ${ac_cv_cmu_lib_subdir+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  test "X$with_lib_subdir" = "Xyes" && with_lib_subdir=
+test "X$with_lib_subdir" = "Xno" && with_lib_subdir=
+if test "X$with_lib_subdir" = "X" ; then
+  ac_cv_cmu_lib_subdir=lib
+  if test $ac_cv_sizeof_long -eq 4 ; then
+    test -d /usr/lib32 && ac_cv_cmu_lib_subdir=lib32
+  fi
+  if test $ac_cv_sizeof_long -eq 8 ; then
+    test -d /usr/lib64 && ac_cv_cmu_lib_subdir=lib64
+  fi
+else
+  ac_cv_cmu_lib_subdir=$with_lib_subdir
+fi
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cmu_lib_subdir" >&5
+$as_echo "$ac_cv_cmu_lib_subdir" >&6; }
+CMU_LIB_SUBDIR=$ac_cv_cmu_lib_subdir
+
+
+
+
+
+# Check whether --with-openssl was given.
+if test "${with_openssl+set}" = set; then :
+  withval=$with_openssl; with_openssl=$withval
+else
+  with_openssl="yes"
+fi
+
+
+	save_CPPFLAGS=$CPPFLAGS
+	save_LDFLAGS=$LDFLAGS
+
+	if test -d $with_openssl; then
+	  CPPFLAGS="${CPPFLAGS} -I${with_openssl}/include"
+
+  # this is CMU ADD LIBPATH
+  if test "$andrew_runpath_switch" = "none" ; then
+	LDFLAGS="-L${with_openssl}/$CMU_LIB_SUBDIR ${LDFLAGS}"
+  else
+	LDFLAGS="-L${with_openssl}/$CMU_LIB_SUBDIR $andrew_runpath_switch${with_openssl}/$CMU_LIB_SUBDIR ${LDFLAGS}"
+  fi
+
+	fi
+
+case "$with_openssl" in
+	no)
+	  with_openssl="no";;
+	*)
+	  	                  LIB_RSAREF=""
+	        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for RSAPublicEncrypt in -lrsaref" >&5
+$as_echo_n "checking for RSAPublicEncrypt in -lrsaref... " >&6; }
+if ${ac_cv_lib_rsaref_RSAPublicEncrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lrsaref  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char RSAPublicEncrypt ();
+int
+main ()
+{
+return RSAPublicEncrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_rsaref_RSAPublicEncrypt=yes
+else
+  ac_cv_lib_rsaref_RSAPublicEncrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_rsaref_RSAPublicEncrypt" >&5
+$as_echo "$ac_cv_lib_rsaref_RSAPublicEncrypt" >&6; }
+if test "x$ac_cv_lib_rsaref_RSAPublicEncrypt" = xyes; then :
+  cmu_have_rsaref=yes;
+			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for RSAPublicEncrypt in -lRSAglue" >&5
+$as_echo_n "checking for RSAPublicEncrypt in -lRSAglue... " >&6; }
+if ${ac_cv_lib_RSAglue_RSAPublicEncrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lRSAglue  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char RSAPublicEncrypt ();
+int
+main ()
+{
+return RSAPublicEncrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_RSAglue_RSAPublicEncrypt=yes
+else
+  ac_cv_lib_RSAglue_RSAPublicEncrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_RSAglue_RSAPublicEncrypt" >&5
+$as_echo "$ac_cv_lib_RSAglue_RSAPublicEncrypt" >&6; }
+if test "x$ac_cv_lib_RSAglue_RSAPublicEncrypt" = xyes; then :
+  LIB_RSAREF="-lRSAglue -lrsaref"
+else
+  LIB_RSAREF="-lrsaref"
+fi
+
+else
+  cmu_have_rsaref=no
+fi
+
+
+		ac_fn_c_check_header_mongrel "$LINENO" "openssl/evp.h" "ac_cv_header_openssl_evp_h" "$ac_includes_default"
+if test "x$ac_cv_header_openssl_evp_h" = xyes; then :
+
+			{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for EVP_DigestInit in -lcrypto" >&5
+$as_echo_n "checking for EVP_DigestInit in -lcrypto... " >&6; }
+if ${ac_cv_lib_crypto_EVP_DigestInit+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcrypto $LIB_RSAREF $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char EVP_DigestInit ();
+int
+main ()
+{
+return EVP_DigestInit ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_crypto_EVP_DigestInit=yes
+else
+  ac_cv_lib_crypto_EVP_DigestInit=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_crypto_EVP_DigestInit" >&5
+$as_echo "$ac_cv_lib_crypto_EVP_DigestInit" >&6; }
+if test "x$ac_cv_lib_crypto_EVP_DigestInit" = xyes; then :
+  with_openssl="yes"
+else
+  with_openssl="no"
+fi
+
+else
+  with_openssl=no
+fi
+
+
+		;;
+esac
+
+	if test "$with_openssl" != "no"; then
+
+$as_echo "#define HAVE_OPENSSL /**/" >>confdefs.h
+
+	else
+		CPPFLAGS=$save_CPPFLAGS
+		LDFLAGS=$save_LDFLAGS
+	fi
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for OpenSSL" >&5
 $as_echo_n "checking for OpenSSL... " >&6; }
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_openssl" >&5
@@ -12842,7 +14111,732 @@ $as_echo "disabled" >&6; }
 fi
 
 SASL_KERBEROS_V4_CHK
-SASL_GSSAPI_CHK
+ac_fn_c_check_func "$LINENO" "crypt" "ac_cv_func_crypt"
+if test "x$ac_cv_func_crypt" = xyes; then :
+  cmu_have_crypt=yes
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for crypt in -lcrypt" >&5
+$as_echo_n "checking for crypt in -lcrypt... " >&6; }
+if ${ac_cv_lib_crypt_crypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcrypt  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char crypt ();
+int
+main ()
+{
+return crypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_crypt_crypt=yes
+else
+  ac_cv_lib_crypt_crypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_crypt_crypt" >&5
+$as_echo "$ac_cv_lib_crypt_crypt" >&6; }
+if test "x$ac_cv_lib_crypt_crypt" = xyes; then :
+  LIB_CRYPT="-lcrypt"; cmu_have_crypt=yes
+else
+  cmu_have_crypt=no
+fi
+
+fi
+
+
+
+
+
+# Check whether --enable-gssapi was given.
+if test "${enable_gssapi+set}" = set; then :
+  enableval=$enable_gssapi; gssapi=$enableval
+else
+  gssapi=yes
+fi
+
+
+# Check whether --with-gss_impl was given.
+if test "${with_gss_impl+set}" = set; then :
+  withval=$with_gss_impl; gss_impl=$withval
+else
+  gss_impl=auto
+fi
+
+
+if test "$gssapi" != no; then
+  platform=
+  case "${host}" in
+    *-*-linux*)
+      platform=__linux
+      ;;
+    *-*-hpux*)
+      platform=__hpux
+      ;;
+    *-*-irix*)
+      platform=__irix
+      ;;
+    *-*-solaris2*)
+# When should we use __sunos?
+      platform=__solaris
+      ;;
+    *-*-aix*)
+###_AIX
+      platform=__aix
+      ;;
+    *)
+      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: The system type is not recognized. If you believe that CyberSafe GSSAPI works on this platform, please update the configure script" >&5
+$as_echo "$as_me: WARNING: The system type is not recognized. If you believe that CyberSafe GSSAPI works on this platform, please update the configure script" >&2;}
+      if test "$gss_impl" = "cybersafe"; then
+        as_fn_error $? "CyberSafe was forced, cannot continue as platform is not supported" "$LINENO" 5
+      fi
+      ;;
+  esac
+
+  cmu_saved_CPPFLAGS=$CPPFLAGS
+
+  if test -d ${gssapi}; then
+    CPPFLAGS="$CPPFLAGS -I$gssapi/include"
+# We want to keep -I in our CPPFLAGS, but only if we succeed
+    cmu_saved_CPPFLAGS=$CPPFLAGS
+### I am not sure how useful is this (and whether this is required at all
+### especially when we have to provide two -L flags for new CyberSafe
+    LDFLAGS="$LDFLAGS -L$gssapi/lib"
+
+    if test -n "$platform"; then
+      if test "$gss_impl" = "auto" -o "$gss_impl" = "cybersafe"; then
+        CPPFLAGS="$CPPFLAGS -D$platform"
+        if test -d "${gssapi}/appsec-sdk/include"; then
+          CPPFLAGS="$CPPFLAGS -I${gssapi}/appsec-sdk/include"
+        fi
+      fi
+    fi
+  fi
+  ac_fn_c_check_header_mongrel "$LINENO" "gssapi.h" "ac_cv_header_gssapi_h" "$ac_includes_default"
+if test "x$ac_cv_header_gssapi_h" = xyes; then :
+
+$as_echo "#define HAVE_GSSAPI_H /**/" >>confdefs.h
+
+else
+  ac_fn_c_check_header_mongrel "$LINENO" "gssapi/gssapi.h" "ac_cv_header_gssapi_gssapi_h" "$ac_includes_default"
+if test "x$ac_cv_header_gssapi_gssapi_h" = xyes; then :
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Disabling GSSAPI - no include files found" >&5
+$as_echo "$as_me: WARNING: Disabling GSSAPI - no include files found" >&2;}; gssapi=no
+fi
+
+
+fi
+
+
+
+  CPPFLAGS=$cmu_saved_CPPFLAGS
+
+fi
+
+if test "$gssapi" != no; then
+  # We need to find out which gssapi implementation we are
+  # using. Supported alternatives are: MIT Kerberos 5,
+  # Heimdal Kerberos 5 (http://www.pdc.kth.se/heimdal),
+  # CyberSafe Kerberos 5 (http://www.cybersafe.com/)
+  # and Sun SEAM (http://wwws.sun.com/software/security/kerberos/)
+  #
+  # The choice is reflected in GSSAPIBASE_LIBS
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for res_search in -lresolv" >&5
+$as_echo_n "checking for res_search in -lresolv... " >&6; }
+if ${ac_cv_lib_resolv_res_search+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lresolv  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char res_search ();
+int
+main ()
+{
+return res_search ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_resolv_res_search=yes
+else
+  ac_cv_lib_resolv_res_search=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_resolv_res_search" >&5
+$as_echo "$ac_cv_lib_resolv_res_search" >&6; }
+if test "x$ac_cv_lib_resolv_res_search" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBRESOLV 1
+_ACEOF
+
+  LIBS="-lresolv $LIBS"
+
+fi
+
+  if test -d ${gssapi}; then
+     gssapi_dir="${gssapi}/lib"
+     GSSAPIBASE_LIBS="-L$gssapi_dir"
+     GSSAPIBASE_STATIC_LIBS="-L$gssapi_dir"
+  else
+     # FIXME: This is only used for building cyrus, and then only as
+     # a real hack.  it needs to be fixed.
+     gssapi_dir="/usr/local/lib"
+  fi
+
+  # Check a full link against the Heimdal libraries.
+  # If this fails, check a full link against the MIT libraries.
+  # If this fails, check a full link against the CyberSafe libraries.
+  # If this fails, check a full link against the Solaris 8 and up libgss.
+
+  if test "$gss_impl" = "auto" -o "$gss_impl" = "heimdal"; then
+    gss_failed=0
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gss_unwrap in -lgssapi" >&5
+$as_echo_n "checking for gss_unwrap in -lgssapi... " >&6; }
+if ${ac_cv_lib_gssapi_gss_unwrap+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgssapi ${GSSAPIBASE_LIBS} -lgssapi -lkrb5 -lasn1 -lroken ${LIB_CRYPT} ${LIB_DES} -lcom_err ${LIB_SOCKET} $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gss_unwrap ();
+int
+main ()
+{
+return gss_unwrap ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gssapi_gss_unwrap=yes
+else
+  ac_cv_lib_gssapi_gss_unwrap=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gssapi_gss_unwrap" >&5
+$as_echo "$ac_cv_lib_gssapi_gss_unwrap" >&6; }
+if test "x$ac_cv_lib_gssapi_gss_unwrap" = xyes; then :
+  gss_impl="heimdal"
+else
+  gss_failed=1
+fi
+
+    if test "$gss_impl" != "auto" -a "$gss_failed" = "1"; then
+      gss_impl="failed"
+    fi
+  fi
+
+  if test "$gss_impl" = "auto" -o "$gss_impl" = "mit"; then
+    # check for libkrb5support first
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for krb5int_getspecific in -lkrb5support" >&5
+$as_echo_n "checking for krb5int_getspecific in -lkrb5support... " >&6; }
+if ${ac_cv_lib_krb5support_krb5int_getspecific+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lkrb5support ${LIB_SOCKET} $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char krb5int_getspecific ();
+int
+main ()
+{
+return krb5int_getspecific ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_krb5support_krb5int_getspecific=yes
+else
+  ac_cv_lib_krb5support_krb5int_getspecific=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_krb5support_krb5int_getspecific" >&5
+$as_echo "$ac_cv_lib_krb5support_krb5int_getspecific" >&6; }
+if test "x$ac_cv_lib_krb5support_krb5int_getspecific" = xyes; then :
+  K5SUP=-lkrb5support K5SUPSTATIC=$gssapi_dir/libkrb5support.a
+fi
+
+
+    gss_failed=0
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gss_unwrap in -lgssapi_krb5" >&5
+$as_echo_n "checking for gss_unwrap in -lgssapi_krb5... " >&6; }
+if ${ac_cv_lib_gssapi_krb5_gss_unwrap+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgssapi_krb5 ${GSSAPIBASE_LIBS} -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err ${K5SUP} ${LIB_SOCKET} $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gss_unwrap ();
+int
+main ()
+{
+return gss_unwrap ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gssapi_krb5_gss_unwrap=yes
+else
+  ac_cv_lib_gssapi_krb5_gss_unwrap=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gssapi_krb5_gss_unwrap" >&5
+$as_echo "$ac_cv_lib_gssapi_krb5_gss_unwrap" >&6; }
+if test "x$ac_cv_lib_gssapi_krb5_gss_unwrap" = xyes; then :
+  gss_impl="mit"
+else
+  gss_failed=1
+fi
+
+    if test "$gss_impl" != "auto" -a "$gss_failed" = "1"; then
+      gss_impl="failed"
+    fi
+  fi
+
+  # For Cybersafe one has to set a platform define in order to make compilation work
+  if test "$gss_impl" = "auto" -o "$gss_impl" = "cybersafe"; then
+
+    cmu_saved_CPPFLAGS=$CPPFLAGS
+    cmu_saved_GSSAPIBASE_LIBS=$GSSAPIBASE_LIBS
+# FIXME - Note that the libraries are in .../lib64 for 64bit kernels
+    if test -d "${gssapi}/appsec-rt/lib"; then
+      GSSAPIBASE_LIBS="$GSSAPIBASE_LIBS -L${gssapi}/appsec-rt/lib"
+    fi
+    CPPFLAGS="$CPPFLAGS -D$platform"
+    if test -d "${gssapi}/appsec-sdk/include"; then
+      CPPFLAGS="$CPPFLAGS -I${gssapi}/appsec-sdk/include"
+    fi
+
+    gss_failed=0
+
+# Check for CyberSafe with two libraries first, than fall back to a single
+# library (older CyberSafe)
+
+    unset ac_cv_lib_gss_csf_gss_acq_user
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for csf_gss_acq_user in -lgss" >&5
+$as_echo_n "checking for csf_gss_acq_user in -lgss... " >&6; }
+if ${ac_cv_lib_gss_csf_gss_acq_user+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgss ${GSSAPIBASE_LIBS} -lgss -lcstbk5 $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char csf_gss_acq_user ();
+int
+main ()
+{
+return csf_gss_acq_user ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gss_csf_gss_acq_user=yes
+else
+  ac_cv_lib_gss_csf_gss_acq_user=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gss_csf_gss_acq_user" >&5
+$as_echo "$ac_cv_lib_gss_csf_gss_acq_user" >&6; }
+if test "x$ac_cv_lib_gss_csf_gss_acq_user" = xyes; then :
+  gss_impl="cybersafe03"
+else
+  unset ac_cv_lib_gss_csf_gss_acq_user;
+                  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for csf_gss_acq_user in -lgss" >&5
+$as_echo_n "checking for csf_gss_acq_user in -lgss... " >&6; }
+if ${ac_cv_lib_gss_csf_gss_acq_user+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgss $GSSAPIBASE_LIBS -lgss $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char csf_gss_acq_user ();
+int
+main ()
+{
+return csf_gss_acq_user ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gss_csf_gss_acq_user=yes
+else
+  ac_cv_lib_gss_csf_gss_acq_user=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gss_csf_gss_acq_user" >&5
+$as_echo "$ac_cv_lib_gss_csf_gss_acq_user" >&6; }
+if test "x$ac_cv_lib_gss_csf_gss_acq_user" = xyes; then :
+  gss_impl="cybersafe"
+else
+  gss_failed=1
+fi
+
+fi
+
+
+    if test "$gss_failed" = "1"; then
+# Restore variables
+      GSSAPIBASE_LIBS=$cmu_saved_GSSAPIBASE_LIBS
+      CPPFLAGS=$cmu_saved_CPPFLAGS
+
+      if test "$gss_impl" != "auto"; then
+        gss_impl="failed"
+      fi
+    fi
+  fi
+
+  if test "$gss_impl" = "auto" -o "$gss_impl" = "seam"; then
+    gss_failed=0
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gss_unwrap in -lgss" >&5
+$as_echo_n "checking for gss_unwrap in -lgss... " >&6; }
+if ${ac_cv_lib_gss_gss_unwrap+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lgss -lgss $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gss_unwrap ();
+int
+main ()
+{
+return gss_unwrap ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_gss_gss_unwrap=yes
+else
+  ac_cv_lib_gss_gss_unwrap=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_gss_gss_unwrap" >&5
+$as_echo "$ac_cv_lib_gss_gss_unwrap" >&6; }
+if test "x$ac_cv_lib_gss_gss_unwrap" = xyes; then :
+  gss_impl="seam"
+else
+  gss_failed=1
+fi
+
+    if test "$gss_impl" != "auto" -a "$gss_failed" = "1"; then
+      gss_impl="failed"
+    fi
+  fi
+
+  if test "$gss_impl" = "mit"; then
+    GSSAPIBASE_LIBS="$GSSAPIBASE_LIBS -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err ${K5SUP}"
+    GSSAPIBASE_STATIC_LIBS="$GSSAPIBASE_LIBS $gssapi_dir/libgssapi_krb5.a $gssapi_dir/libkrb5.a $gssapi_dir/libk5crypto.a $gssapi_dir/libcom_err.a ${K5SUPSTATIC}"
+  elif test "$gss_impl" = "heimdal"; then
+    CPPFLAGS="$CPPFLAGS -DKRB5_HEIMDAL"
+    GSSAPIBASE_LIBS="$GSSAPIBASE_LIBS -lgssapi -lkrb5 -lasn1 -lroken ${LIB_CRYPT} ${LIB_DES} -lcom_err"
+    GSSAPIBASE_STATIC_LIBS="$GSSAPIBASE_STATIC_LIBS $gssapi_dir/libgssapi.a $gssapi_dir/libkrb5.a $gssapi_dir/libasn1.a $gssapi_dir/libroken.a $gssapi_dir/libcom_err.a ${LIB_CRYPT}"
+  elif test "$gss_impl" = "cybersafe03"; then
+# Version of CyberSafe with two libraries
+    CPPFLAGS="$CPPFLAGS -D$platform -I${gssapi}/appsec-sdk/include"
+    GSSAPIBASE_LIBS="$GSSAPIBASE_LIBS -lgss -lcstbk5"
+    # there is no static libgss for CyberSafe
+    GSSAPIBASE_STATIC_LIBS=none
+  elif test "$gss_impl" = "cybersafe"; then
+    CPPFLAGS="$CPPFLAGS -D$platform -I${gssapi}/appsec-sdk/include"
+    GSSAPIBASE_LIBS="$GSSAPIBASE_LIBS -lgss"
+    # there is no static libgss for CyberSafe
+    GSSAPIBASE_STATIC_LIBS=none
+  elif test "$gss_impl" = "seam"; then
+    GSSAPIBASE_LIBS=-lgss
+    # there is no static libgss on Solaris 8 and up
+    GSSAPIBASE_STATIC_LIBS=none
+  elif test "$gss_impl" = "failed"; then
+    gssapi="no"
+    GSSAPIBASE_LIBS=
+    GSSAPIBASE_STATIC_LIBS=
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Disabling GSSAPI - specified library not found" >&5
+$as_echo "$as_me: WARNING: Disabling GSSAPI - specified library not found" >&2;}
+  else
+    gssapi="no"
+    GSSAPIBASE_LIBS=
+    GSSAPIBASE_STATIC_LIBS=
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Disabling GSSAPI - no library" >&5
+$as_echo "$as_me: WARNING: Disabling GSSAPI - no library" >&2;}
+  fi
+fi
+
+#
+# Cybersafe defines both GSS_C_NT_HOSTBASED_SERVICE and GSS_C_NT_USER_NAME
+# in gssapi\rfckrb5.h
+#
+if test "$gssapi" != "no"; then
+  if test "$gss_impl" = "cybersafe" -o "$gss_impl" = "cybersafe03"; then
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <gssapi/gssapi.h>
+                  #ifdef GSS_C_NT_HOSTBASED_SERVICE
+                    hostbased_service_gss_nt_yes
+                  #endif
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "hostbased_service_gss_nt_yes" >/dev/null 2>&1; then :
+
+$as_echo "#define HAVE_GSS_C_NT_HOSTBASED_SERVICE /**/" >>confdefs.h
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Cybersafe define not found" >&5
+$as_echo "$as_me: WARNING: Cybersafe define not found" >&2;}
+fi
+rm -f conftest*
+
+
+  elif test "$ac_cv_header_gssapi_h" = "yes"; then
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <gssapi.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "GSS_C_NT_HOSTBASED_SERVICE" >/dev/null 2>&1; then :
+
+$as_echo "#define HAVE_GSS_C_NT_HOSTBASED_SERVICE /**/" >>confdefs.h
+
+fi
+rm -f conftest*
+
+  elif test "$ac_cv_header_gssapi_gssapi_h"; then
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <gssapi/gssapi.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "GSS_C_NT_HOSTBASED_SERVICE" >/dev/null 2>&1; then :
+
+$as_echo "#define HAVE_GSS_C_NT_HOSTBASED_SERVICE /**/" >>confdefs.h
+
+fi
+rm -f conftest*
+
+  fi
+
+  if test "$gss_impl" = "cybersafe" -o "$gss_impl" = "cybersafe03"; then
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <gssapi/gssapi.h>
+                  #ifdef GSS_C_NT_USER_NAME
+                   user_name_yes_gss_nt
+                  #endif
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "user_name_yes_gss_nt" >/dev/null 2>&1; then :
+
+$as_echo "#define HAVE_GSS_C_NT_USER_NAME /**/" >>confdefs.h
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Cybersafe define not found" >&5
+$as_echo "$as_me: WARNING: Cybersafe define not found" >&2;}
+fi
+rm -f conftest*
+
+  elif test "$ac_cv_header_gssapi_h" = "yes"; then
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <gssapi.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "GSS_C_NT_USER_NAME" >/dev/null 2>&1; then :
+
+$as_echo "#define HAVE_GSS_C_NT_USER_NAME /**/" >>confdefs.h
+
+fi
+rm -f conftest*
+
+  elif test "$ac_cv_header_gssapi_gssapi_h"; then
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <gssapi/gssapi.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "GSS_C_NT_USER_NAME" >/dev/null 2>&1; then :
+
+$as_echo "#define HAVE_GSS_C_NT_USER_NAME /**/" >>confdefs.h
+
+fi
+rm -f conftest*
+
+  fi
+fi
+
+GSSAPI_LIBS=""
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking GSSAPI" >&5
+$as_echo_n "checking GSSAPI... " >&6; }
+if test "$gssapi" != no; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: with implementation ${gss_impl}" >&5
+$as_echo "with implementation ${gss_impl}" >&6; }
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for res_search in -lresolv" >&5
+$as_echo_n "checking for res_search in -lresolv... " >&6; }
+if ${ac_cv_lib_resolv_res_search+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lresolv  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char res_search ();
+int
+main ()
+{
+return res_search ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_resolv_res_search=yes
+else
+  ac_cv_lib_resolv_res_search=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_resolv_res_search" >&5
+$as_echo "$ac_cv_lib_resolv_res_search" >&6; }
+if test "x$ac_cv_lib_resolv_res_search" = xyes; then :
+  GSSAPIBASE_LIBS="$GSSAPIBASE_LIBS -lresolv"
+fi
+
+  SASL_MECHS="$SASL_MECHS libgssapiv2.la"
+  SASL_STATIC_OBJS="$SASL_STATIC_OBJS gssapi.o"
+  SASL_STATIC_SRCS="$SASL_STATIC_SRCS ../plugins/gssapi.c"
+
+  cmu_save_LIBS="$LIBS"
+  LIBS="$LIBS $GSSAPIBASE_LIBS"
+  for ac_func in gsskrb5_register_acceptor_identity
+do :
+  ac_fn_c_check_func "$LINENO" "gsskrb5_register_acceptor_identity" "ac_cv_func_gsskrb5_register_acceptor_identity"
+if test "x$ac_cv_func_gsskrb5_register_acceptor_identity" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_GSSKRB5_REGISTER_ACCEPTOR_IDENTITY 1
+_ACEOF
+
+fi
+done
+
+  LIBS="$cmu_save_LIBS"
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: disabled" >&5
+$as_echo "disabled" >&6; }
+fi
+
+
+
 
 if test "$gssapi" != "no"; then
 
@@ -13070,13 +15064,41 @@ case "$with_mysql" in
 $as_echo "$as_me: WARNING: MySQL Library not found" >&2;}; true;;
     *)
      if test -d ${with_mysql}/lib/mysql; then
-	CMU_ADD_LIBPATH_TO(${with_mysql}/lib/mysql, LIB_MYSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_MYSQL="-L${with_mysql}/lib/mysql ${LIB_MYSQL}"
+  else
+	LIB_MYSQL="-L${with_mysql}/lib/mysql ${LIB_MYSQL} $andrew_runpath_switch${with_mysql}/lib/mysql"
+  fi
+
      elif test -d ${with_mysql}/mysql/lib; then
-	CMU_ADD_LIBPATH_TO(${with_mysql}/mysql/lib, LIB_MYSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_MYSQL="-L${with_mysql}/mysql/lib ${LIB_MYSQL}"
+  else
+	LIB_MYSQL="-L${with_mysql}/mysql/lib ${LIB_MYSQL} $andrew_runpath_switch${with_mysql}/mysql/lib"
+  fi
+
      elif test -d ${with_mysql}/lib; then
-	CMU_ADD_LIBPATH_TO(${with_mysql}/lib, LIB_MYSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_MYSQL="-L${with_mysql}/lib ${LIB_MYSQL}"
+  else
+	LIB_MYSQL="-L${with_mysql}/lib ${LIB_MYSQL} $andrew_runpath_switch${with_mysql}/lib"
+  fi
+
      else
-	CMU_ADD_LIBPATH_TO(${with_mysql}, LIB_MYSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_MYSQL="-L${with_mysql} ${LIB_MYSQL}"
+  else
+	LIB_MYSQL="-L${with_mysql} ${LIB_MYSQL} $andrew_runpath_switch${with_mysql}"
+  fi
+
      fi
 
      LIB_MYSQL_DIR=$LIB_MYSQL
@@ -13181,13 +15203,41 @@ case "$with_pgsql" in
 $as_echo "$as_me: WARNING: PostgreSQL Library not found" >&2;}; true;;
     *)
      if test -d ${with_pgsql}/lib/pgsql; then
-	CMU_ADD_LIBPATH_TO(${with_pgsql}/lib/pgsql, LIB_PGSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_PGSQL="-L${with_pgsql}/lib/pgsql ${LIB_PGSQL}"
+  else
+	LIB_PGSQL="-L${with_pgsql}/lib/pgsql ${LIB_PGSQL} $andrew_runpath_switch${with_pgsql}/lib/pgsql"
+  fi
+
      elif test -d ${with_pgsql}/pgsql/lib; then
-	CMU_ADD_LIBPATH_TO(${with_pgsql}/pgsql/lib, LIB_PGSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_PGSQL="-L${with_pgsql}/pgsql/lib ${LIB_PGSQL}"
+  else
+	LIB_PGSQL="-L${with_pgsql}/pgsql/lib ${LIB_PGSQL} $andrew_runpath_switch${with_pgsql}/pgsql/lib"
+  fi
+
      elif test -d ${with_pgsql}/lib; then
-	CMU_ADD_LIBPATH_TO(${with_pgsql}/lib, LIB_PGSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_PGSQL="-L${with_pgsql}/lib ${LIB_PGSQL}"
+  else
+	LIB_PGSQL="-L${with_pgsql}/lib ${LIB_PGSQL} $andrew_runpath_switch${with_pgsql}/lib"
+  fi
+
      else
-	CMU_ADD_LIBPATH_TO(${with_pgsql}, LIB_PGSQL)
+
+  # this is CMU ADD LIBPATH TO
+  if test "$andrew_runpath_switch" = "none" ; then
+	LIB_PGSQL="-L${with_pgsql} ${LIB_PGSQL}"
+  else
+	LIB_PGSQL="-L${with_pgsql} ${LIB_PGSQL} $andrew_runpath_switch${with_pgsql}"
+  fi
+
      fi
 
      LIB_PGSQL_DIR=$LIB_PGSQL
@@ -13388,7 +15438,14 @@ $as_echo "enabled" >&6; }
 
     if test -d $with_ldap; then
         CPPFLAGS="${CPPFLAGS} -I${with_ldap}/include"
-        CMU_ADD_LIBPATH(${with_ldap}/lib)
+
+  # this is CMU ADD LIBPATH
+  if test "$andrew_runpath_switch" = "none" ; then
+	LDFLAGS="-L${with_ldap}/lib ${LDFLAGS}"
+  else
+	LDFLAGS="-L${with_ldap}/lib $andrew_runpath_switch${with_ldap}/lib ${LDFLAGS}"
+  fi
+
     fi
 
     for ac_header in ldap.h lber.h
@@ -13406,7 +15463,34 @@ done
 
 
     if test $ac_cv_header_ldap_h = yes -a $ac_cv_header_lber_h = yes; then
-        CMU_OPENLDAP_API
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking OpenLDAP api" >&5
+$as_echo_n "checking OpenLDAP api... " >&6; }
+if ${cmu_cv_openldap_api+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <ldap.h>
+
+#ifdef LDAP_API_FEATURE_X_OPENLDAP
+char *__openldap_api = LDAP_API_FEATURE_X_OPENLDAP;
+#endif
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "__openldap_api" >/dev/null 2>&1; then :
+  cmu_cv_openldap_api=yes
+else
+  cmu_cv_openldap_api=no
+fi
+rm -f conftest*
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $cmu_cv_openldap_api" >&5
+$as_echo "$cmu_cv_openldap_api" >&6; }
+
 
         if test "$cmu_cv_openldap_api" = yes; then
             { $as_echo "$as_me:${as_lineno-$LINENO}: checking for ldap_initialize in -lldap" >&5
@@ -13457,7 +15541,39 @@ fi
     if test "$cmu_cv_openldap_api" = no -o "$cmu_link_openldap" = no; then
         as_fn_error $? "Cannot enable LDAPDB plugin: Could not locate OpenLDAP" "$LINENO" 5
     else
-        CMU_OPENLDAP_COMPAT
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking OpenLDAP version" >&5
+$as_echo_n "checking OpenLDAP version... " >&6; }
+if ${cmu_cv_openldap_compat+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <ldap.h>
+
+/* Require 2.1.27+ and 2.2.6+ */
+#if LDAP_VENDOR_VERSION_MAJOR == 2  && LDAP_VENDOR_VERSION_MINOR == 1 && LDAP_VENDOR_VERSION_PATCH > 26
+char *__openldap_compat = "2.1.27 or better okay";
+#elif LDAP_VENDOR_VERSION_MAJOR == 2  && LDAP_VENDOR_VERSION_MINOR == 2 && LDAP_VENDOR_VERSION_PATCH > 5
+char *__openldap_compat = "2.2.6 or better okay";
+#elif LDAP_VENDOR_VERSION_MAJOR == 2  && LDAP_VENDOR_VERSION_MINOR > 2
+char *__openldap_compat = "2.3 or better okay"
+#endif
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "__openldap_compat" >/dev/null 2>&1; then :
+  cmu_cv_openldap_compat=yes
+else
+  cmu_cv_openldap_compat=no
+fi
+rm -f conftest*
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $cmu_cv_openldap_compat" >&5
+$as_echo "$cmu_cv_openldap_compat" >&6; }
+
 
         if test "$cmu_cv_openldap_compat" = no; then
             as_fn_error $? "Cannot enable LDAPDB plugin: OpenLDAP library located but incompatible" "$LINENO" 5
@@ -13779,9 +15895,324 @@ fi
 
 GETADDRINFOOBJS=""
 sasl_cv_getaddrinfo=yes
-IPv6_CHECK_FUNC(getaddrinfo, IPv6_CHECK_FUNC(gai_strerror,
-                [AC_DEFINE(HAVE_GETADDRINFO,[],[Do we have a getaddrinfo() function?])
-                sasl_cv_getaddrinfo=no]))
+
+ac_fn_c_check_func "$LINENO" "getaddrinfo" "ac_cv_func_getaddrinfo"
+if test "x$ac_cv_func_getaddrinfo" = xyes; then :
+    ac_cv_lib_socket_getaddrinfo=no
+  ac_cv_lib_inet6_getaddrinfo=no
+
+else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for getaddrinfo in -lsocket" >&5
+$as_echo_n "checking for getaddrinfo in -lsocket... " >&6; }
+if ${ac_cv_lib_socket_getaddrinfo+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lsocket  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char getaddrinfo ();
+int
+main ()
+{
+return getaddrinfo ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_socket_getaddrinfo=yes
+else
+  ac_cv_lib_socket_getaddrinfo=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_socket_getaddrinfo" >&5
+$as_echo "$ac_cv_lib_socket_getaddrinfo" >&6; }
+if test "x$ac_cv_lib_socket_getaddrinfo" = xyes; then :
+      LIBS="$LIBS -lsocket"
+    ac_cv_lib_inet6_getaddrinfo=no
+
+else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether your system has IPv6 directory" >&5
+$as_echo_n "checking whether your system has IPv6 directory... " >&6; }
+    if ${ipv6_cv_dir+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+        for ipv6_cv_dir in /usr/local/v6 /usr/inet6 no; do
+	if test $ipv6_cv_dir = no -o -d $ipv6_cv_dir; then
+	  break
+	fi
+      done
+fi
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ipv6_cv_dir" >&5
+$as_echo "$ipv6_cv_dir" >&6; }
+    if test $ipv6_cv_dir = no; then
+      ac_cv_lib_inet6_getaddrinfo=no
+    else
+      if test x$ipv6_libinet6 = x; then
+	ipv6_libinet6=no
+	SAVELDFLAGS="$LDFLAGS"
+	LDFLAGS="$LDFLAGS -L$ipv6_cv_dir/lib"
+      fi
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for getaddrinfo in -linet6" >&5
+$as_echo_n "checking for getaddrinfo in -linet6... " >&6; }
+if ${ac_cv_lib_inet6_getaddrinfo+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-linet6  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char getaddrinfo ();
+int
+main ()
+{
+return getaddrinfo ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_inet6_getaddrinfo=yes
+else
+  ac_cv_lib_inet6_getaddrinfo=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_inet6_getaddrinfo" >&5
+$as_echo "$ac_cv_lib_inet6_getaddrinfo" >&6; }
+if test "x$ac_cv_lib_inet6_getaddrinfo" = xyes; then :
+  	if test $ipv6_libinet6 = no; then
+	  ipv6_libinet6=yes
+	  LIBS="$LIBS -linet6"
+	fi
+fi
+      if test $ipv6_libinet6 = no; then
+	LDFLAGS="$SAVELDFLAGS"
+      fi
+    fi
+fi
+
+fi
+ipv6_cv_getaddrinfo=no
+if test $ac_cv_func_getaddrinfo = yes -o $ac_cv_lib_socket_getaddrinfo = yes \
+     -o $ac_cv_lib_inet6_getaddrinfo = yes
+then
+  ipv6_cv_getaddrinfo=yes
+fi
+if test $ipv6_cv_getaddrinfo = no; then
+  if test getaddrinfo = getaddrinfo; then
+    for ipv6_cv_pfx in o n; do
+      cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <netdb.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "${ipv6_cv_pfx}getaddrinfo" >/dev/null 2>&1; then :
+  as_ac_var=`$as_echo "ac_cv_func_${ipv6_cv_pfx}getaddrinfo" | $as_tr_sh`
+ac_fn_c_check_func "$LINENO" "${ipv6_cv_pfx}getaddrinfo" "$as_ac_var"
+if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
+
+fi
+
+fi
+rm -f conftest*
+
+      if eval test X\$ac_cv_func_${ipv6_cv_pfx}getaddrinfo = Xyes; then
+
+$as_echo "#define HAVE_GETADDRINFO /**/" >>confdefs.h
+
+        ipv6_cv_getaddrinfo=yes
+        break
+      fi
+    done
+  fi
+fi
+if test $ipv6_cv_getaddrinfo = yes; then
+
+ac_fn_c_check_func "$LINENO" "gai_strerror" "ac_cv_func_gai_strerror"
+if test "x$ac_cv_func_gai_strerror" = xyes; then :
+    ac_cv_lib_socket_gai_strerror=no
+  ac_cv_lib_inet6_gai_strerror=no
+
+else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gai_strerror in -lsocket" >&5
+$as_echo_n "checking for gai_strerror in -lsocket... " >&6; }
+if ${ac_cv_lib_socket_gai_strerror+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lsocket  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gai_strerror ();
+int
+main ()
+{
+return gai_strerror ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_socket_gai_strerror=yes
+else
+  ac_cv_lib_socket_gai_strerror=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_socket_gai_strerror" >&5
+$as_echo "$ac_cv_lib_socket_gai_strerror" >&6; }
+if test "x$ac_cv_lib_socket_gai_strerror" = xyes; then :
+      LIBS="$LIBS -lsocket"
+    ac_cv_lib_inet6_gai_strerror=no
+
+else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether your system has IPv6 directory" >&5
+$as_echo_n "checking whether your system has IPv6 directory... " >&6; }
+    if ${ipv6_cv_dir+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+        for ipv6_cv_dir in /usr/local/v6 /usr/inet6 no; do
+	if test $ipv6_cv_dir = no -o -d $ipv6_cv_dir; then
+	  break
+	fi
+      done
+fi
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ipv6_cv_dir" >&5
+$as_echo "$ipv6_cv_dir" >&6; }
+    if test $ipv6_cv_dir = no; then
+      ac_cv_lib_inet6_gai_strerror=no
+    else
+      if test x$ipv6_libinet6 = x; then
+	ipv6_libinet6=no
+	SAVELDFLAGS="$LDFLAGS"
+	LDFLAGS="$LDFLAGS -L$ipv6_cv_dir/lib"
+      fi
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for gai_strerror in -linet6" >&5
+$as_echo_n "checking for gai_strerror in -linet6... " >&6; }
+if ${ac_cv_lib_inet6_gai_strerror+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-linet6  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gai_strerror ();
+int
+main ()
+{
+return gai_strerror ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_inet6_gai_strerror=yes
+else
+  ac_cv_lib_inet6_gai_strerror=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_inet6_gai_strerror" >&5
+$as_echo "$ac_cv_lib_inet6_gai_strerror" >&6; }
+if test "x$ac_cv_lib_inet6_gai_strerror" = xyes; then :
+  	if test $ipv6_libinet6 = no; then
+	  ipv6_libinet6=yes
+	  LIBS="$LIBS -linet6"
+	fi
+fi
+      if test $ipv6_libinet6 = no; then
+	LDFLAGS="$SAVELDFLAGS"
+      fi
+    fi
+fi
+
+fi
+ipv6_cv_gai_strerror=no
+if test $ac_cv_func_gai_strerror = yes -o $ac_cv_lib_socket_gai_strerror = yes \
+     -o $ac_cv_lib_inet6_gai_strerror = yes
+then
+  ipv6_cv_gai_strerror=yes
+fi
+if test $ipv6_cv_gai_strerror = no; then
+  if test gai_strerror = getaddrinfo; then
+    for ipv6_cv_pfx in o n; do
+      cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <netdb.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "${ipv6_cv_pfx}gai_strerror" >/dev/null 2>&1; then :
+  as_ac_var=`$as_echo "ac_cv_func_${ipv6_cv_pfx}gai_strerror" | $as_tr_sh`
+ac_fn_c_check_func "$LINENO" "${ipv6_cv_pfx}gai_strerror" "$as_ac_var"
+if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
+
+fi
+
+fi
+rm -f conftest*
+
+      if eval test X\$ac_cv_func_${ipv6_cv_pfx}gai_strerror = Xyes; then
+
+$as_echo "#define HAVE_GETADDRINFO /**/" >>confdefs.h
+
+        ipv6_cv_gai_strerror=yes
+        break
+      fi
+    done
+  fi
+fi
+if test $ipv6_cv_gai_strerror = yes; then
+
+$as_echo "#define HAVE_GETADDRINFO /**/" >>confdefs.h
+
+                sasl_cv_getaddrinfo=no
+else
+  :
+fi
+else
+  :
+fi
 if test $sasl_cv_getaddrinfo = yes; then
     case " $LIBOBJS " in
   *" getaddrinfo.$ac_objext "* ) ;;
@@ -13797,8 +16228,166 @@ fi
 
 GETNAMEINFOOBJS=""
 sasl_cv_getnameinfo=no
-IPv6_CHECK_FUNC(getnameinfo,
-		AC_DEFINE(HAVE_GETNAMEINFO,[],[Do we have a getnameinfo() function?]), sasl_cv_getnameinfo=yes)
+
+ac_fn_c_check_func "$LINENO" "getnameinfo" "ac_cv_func_getnameinfo"
+if test "x$ac_cv_func_getnameinfo" = xyes; then :
+    ac_cv_lib_socket_getnameinfo=no
+  ac_cv_lib_inet6_getnameinfo=no
+
+else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for getnameinfo in -lsocket" >&5
+$as_echo_n "checking for getnameinfo in -lsocket... " >&6; }
+if ${ac_cv_lib_socket_getnameinfo+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lsocket  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char getnameinfo ();
+int
+main ()
+{
+return getnameinfo ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_socket_getnameinfo=yes
+else
+  ac_cv_lib_socket_getnameinfo=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_socket_getnameinfo" >&5
+$as_echo "$ac_cv_lib_socket_getnameinfo" >&6; }
+if test "x$ac_cv_lib_socket_getnameinfo" = xyes; then :
+      LIBS="$LIBS -lsocket"
+    ac_cv_lib_inet6_getnameinfo=no
+
+else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether your system has IPv6 directory" >&5
+$as_echo_n "checking whether your system has IPv6 directory... " >&6; }
+    if ${ipv6_cv_dir+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+        for ipv6_cv_dir in /usr/local/v6 /usr/inet6 no; do
+	if test $ipv6_cv_dir = no -o -d $ipv6_cv_dir; then
+	  break
+	fi
+      done
+fi
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ipv6_cv_dir" >&5
+$as_echo "$ipv6_cv_dir" >&6; }
+    if test $ipv6_cv_dir = no; then
+      ac_cv_lib_inet6_getnameinfo=no
+    else
+      if test x$ipv6_libinet6 = x; then
+	ipv6_libinet6=no
+	SAVELDFLAGS="$LDFLAGS"
+	LDFLAGS="$LDFLAGS -L$ipv6_cv_dir/lib"
+      fi
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for getnameinfo in -linet6" >&5
+$as_echo_n "checking for getnameinfo in -linet6... " >&6; }
+if ${ac_cv_lib_inet6_getnameinfo+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-linet6  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char getnameinfo ();
+int
+main ()
+{
+return getnameinfo ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_inet6_getnameinfo=yes
+else
+  ac_cv_lib_inet6_getnameinfo=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_inet6_getnameinfo" >&5
+$as_echo "$ac_cv_lib_inet6_getnameinfo" >&6; }
+if test "x$ac_cv_lib_inet6_getnameinfo" = xyes; then :
+  	if test $ipv6_libinet6 = no; then
+	  ipv6_libinet6=yes
+	  LIBS="$LIBS -linet6"
+	fi
+fi
+      if test $ipv6_libinet6 = no; then
+	LDFLAGS="$SAVELDFLAGS"
+      fi
+    fi
+fi
+
+fi
+ipv6_cv_getnameinfo=no
+if test $ac_cv_func_getnameinfo = yes -o $ac_cv_lib_socket_getnameinfo = yes \
+     -o $ac_cv_lib_inet6_getnameinfo = yes
+then
+  ipv6_cv_getnameinfo=yes
+fi
+if test $ipv6_cv_getnameinfo = no; then
+  if test getnameinfo = getaddrinfo; then
+    for ipv6_cv_pfx in o n; do
+      cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <netdb.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "${ipv6_cv_pfx}getnameinfo" >/dev/null 2>&1; then :
+  as_ac_var=`$as_echo "ac_cv_func_${ipv6_cv_pfx}getnameinfo" | $as_tr_sh`
+ac_fn_c_check_func "$LINENO" "${ipv6_cv_pfx}getnameinfo" "$as_ac_var"
+if eval test \"x\$"$as_ac_var"\" = x"yes"; then :
+
+fi
+
+fi
+rm -f conftest*
+
+      if eval test X\$ac_cv_func_${ipv6_cv_pfx}getnameinfo = Xyes; then
+
+$as_echo "#define HAVE_GETADDRINFO /**/" >>confdefs.h
+
+        ipv6_cv_getnameinfo=yes
+        break
+      fi
+    done
+  fi
+fi
+if test $ipv6_cv_getnameinfo = yes; then
+
+$as_echo "#define HAVE_GETNAMEINFO /**/" >>confdefs.h
+
+else
+  sasl_cv_getnameinfo=yes
+fi
 if test $sasl_cv_getnameinfo = yes; then
 	case " $LIBOBJS " in
   *" getnameinfo.$ac_objext "* ) ;;
@@ -14354,9 +16943,109 @@ fi
 done
 
 
-IPv6_CHECK_SS_FAMILY()
-IPv6_CHECK_SA_LEN()
-IPv6_CHECK_SOCKLEN_T()
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether you have ss_family in struct sockaddr_storage" >&5
+$as_echo_n "checking whether you have ss_family in struct sockaddr_storage... " >&6; }
+if ${ipv6_cv_ss_family+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <sys/types.h>
+#include <sys/socket.h>
+int
+main ()
+{
+struct sockaddr_storage ss; int i = ss.ss_family;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ipv6_cv_ss_family=yes
+else
+  ipv6_cv_ss_family=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+if test $ipv6_cv_ss_family = yes; then
+
+$as_echo "#define HAVE_SS_FAMILY /**/" >>confdefs.h
+
+else
+  :
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ipv6_cv_ss_family" >&5
+$as_echo "$ipv6_cv_ss_family" >&6; }
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether you have sa_len in struct sockaddr" >&5
+$as_echo_n "checking whether you have sa_len in struct sockaddr... " >&6; }
+if ${ipv6_cv_sa_len+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <sys/types.h>
+#include <sys/socket.h>
+int
+main ()
+{
+struct sockaddr sa; int i = sa.sa_len;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ipv6_cv_sa_len=yes
+else
+  ipv6_cv_sa_len=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+if test $ipv6_cv_sa_len = yes; then
+
+$as_echo "#define HAVE_SOCKADDR_SA_LEN /**/" >>confdefs.h
+
+else
+  :
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ipv6_cv_sa_len" >&5
+$as_echo "$ipv6_cv_sa_len" >&6; }
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for socklen_t" >&5
+$as_echo_n "checking for socklen_t... " >&6; }
+if ${ipv6_cv_socklen_t+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <sys/types.h>
+#include <sys/socket.h>
+int
+main ()
+{
+socklen_t len = 0;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ipv6_cv_socklen_t=yes
+else
+  ipv6_cv_socklen_t=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+fi
+if test $ipv6_cv_socklen_t = yes; then
+
+$as_echo "#define HAVE_SOCKLEN_T /**/" >>confdefs.h
+
+else
+  :
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ipv6_cv_socklen_t" >&5
+$as_echo "$ipv6_cv_socklen_t" >&6; }
 
 #AC_FUNC_MEMCMP
 #AC_FUNC_VPRINTF

@@ -143,7 +143,21 @@ EXTRA_PROGRAMS = saslpasswd2$(EXEEXT) sasldblistusers2$(EXEEXT) \
 noinst_PROGRAMS = dbconverter-2$(EXEEXT)
 subdir = utils
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
-am__aclocal_m4_deps = $(top_srcdir)/configure.ac
+am__aclocal_m4_deps = $(top_srcdir)/cmulocal/berkdb.m4 \
+	$(top_srcdir)/cmulocal/bsd_sockets.m4 \
+	$(top_srcdir)/cmulocal/c-attribute.m4 \
+	$(top_srcdir)/cmulocal/common.m4 \
+	$(top_srcdir)/cmulocal/cyrus.m4 \
+	$(top_srcdir)/cmulocal/init_automake.m4 \
+	$(top_srcdir)/cmulocal/ipv6.m4 \
+	$(top_srcdir)/cmulocal/libtool.m4 \
+	$(top_srcdir)/cmulocal/ltoptions.m4 \
+	$(top_srcdir)/cmulocal/ltsugar.m4 \
+	$(top_srcdir)/cmulocal/ltversion.m4 \
+	$(top_srcdir)/cmulocal/lt~obsolete.m4 \
+	$(top_srcdir)/cmulocal/openldap.m4 \
+	$(top_srcdir)/cmulocal/openssl.m4 \
+	$(top_srcdir)/cmulocal/sasl2.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 DIST_COMMON = $(srcdir)/Makefile.am $(saslinclude_HEADERS) \
@@ -195,31 +209,34 @@ libsfsasl2_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 PROGRAMS = $(noinst_PROGRAMS) $(sbin_PROGRAMS)
 dbconverter_2_SOURCES = dbconverter-2.c
 dbconverter_2_OBJECTS = dbconverter-2.$(OBJEXT)
-am__DEPENDENCIES_1 = ../lib/libsasl2.la
-dbconverter_2_DEPENDENCIES = ../sasldb/libsasldb.la \
+am__DEPENDENCIES_1 =
+am__DEPENDENCIES_2 = ../lib/libsasl2.la $(am__DEPENDENCIES_1) \
 	$(am__DEPENDENCIES_1)
+dbconverter_2_DEPENDENCIES = ../sasldb/libsasldb.la \
+	$(am__DEPENDENCIES_2)
 am_pluginviewer_OBJECTS = pluginviewer.$(OBJEXT)
 pluginviewer_OBJECTS = $(am_pluginviewer_OBJECTS)
-pluginviewer_DEPENDENCIES = $(am__DEPENDENCIES_1)
+pluginviewer_DEPENDENCIES = $(am__DEPENDENCIES_2)
 am_sasldblistusers2_OBJECTS = sasldblistusers.$(OBJEXT)
 sasldblistusers2_OBJECTS = $(am_sasldblistusers2_OBJECTS)
 sasldblistusers2_DEPENDENCIES = ../sasldb/libsasldb.la \
-	$(am__DEPENDENCIES_1)
+	$(am__DEPENDENCIES_2)
 am_saslpasswd2_OBJECTS = saslpasswd.$(OBJEXT)
 saslpasswd2_OBJECTS = $(am_saslpasswd2_OBJECTS)
 saslpasswd2_DEPENDENCIES = ../sasldb/libsasldb.la \
-	$(am__DEPENDENCIES_1)
+	$(am__DEPENDENCIES_2)
 am_smtptest_OBJECTS =
 smtptest_OBJECTS = $(am_smtptest_OBJECTS)
 testsuite_SOURCES = testsuite.c
 testsuite_OBJECTS = testsuite.$(OBJEXT)
-testsuite_DEPENDENCIES = $(am__DEPENDENCIES_1)
+testsuite_DEPENDENCIES = $(am__DEPENDENCIES_2)
 am_testsuitestatic_OBJECTS = testsuite.$(OBJEXT)
 testsuitestatic_OBJECTS = $(am_testsuitestatic_OBJECTS)
-am__DEPENDENCIES_2 =
-am__DEPENDENCIES_3 = ../lib/.libs/libsasl2.a $(am__DEPENDENCIES_2) \
-	$(am__DEPENDENCIES_2) $(am__DEPENDENCIES_2) \
-	$(am__DEPENDENCIES_2)
+am__DEPENDENCIES_3 = ../lib/.libs/libsasl2.a $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
+	$(am__DEPENDENCIES_1)
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
 am__v_P_0 = false
@@ -304,6 +321,7 @@ AWK = @AWK@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
+CMU_LIB_SUBDIR = @CMU_LIB_SUBDIR@
 CPP = @CPP@
 CPPFLAGS = @CPPFLAGS@
 CYGPATH_W = @CYGPATH_W@
@@ -324,6 +342,8 @@ GETADDRINFOOBJS = @GETADDRINFOOBJS@
 GETNAMEINFOOBJS = @GETNAMEINFOOBJS@
 GETSUBOPT = @GETSUBOPT@
 GREP = @GREP@
+GSSAPIBASE_LIBS = @GSSAPIBASE_LIBS@
+GSSAPI_LIBS = @GSSAPI_LIBS@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -340,10 +360,12 @@ LDFLAGS = @LDFLAGS@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
+LIB_CRYPT = @LIB_CRYPT@
 LIB_DOOR = @LIB_DOOR@
 LIB_LDAP = @LIB_LDAP@
 LIB_MYSQL = @LIB_MYSQL@
 LIB_PGSQL = @LIB_PGSQL@
+LIB_SOCKET = @LIB_SOCKET@
 LIB_SQLITE = @LIB_SQLITE@
 LIPO = @LIPO@
 LN_S = @LN_S@
@@ -375,6 +397,12 @@ PURECOV = @PURECOV@
 PURIFY = @PURIFY@
 PWCHECKMETH = @PWCHECKMETH@
 RANLIB = @RANLIB@
+SASL_DB_BACKEND = @SASL_DB_BACKEND@
+SASL_DB_BACKEND_STATIC = @SASL_DB_BACKEND_STATIC@
+SASL_DB_INC = @SASL_DB_INC@
+SASL_DB_LIB = @SASL_DB_LIB@
+SASL_DB_MANS = @SASL_DB_MANS@
+SASL_DB_UTILS = @SASL_DB_UTILS@
 SASL_DL_LIB = @SASL_DL_LIB@
 SASL_MECHS = @SASL_MECHS@
 SASL_STATIC_LIBS = @SASL_STATIC_LIBS@

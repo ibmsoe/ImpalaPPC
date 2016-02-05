@@ -203,7 +203,9 @@ export IMPALA_COMMON_DIR=$IMPALA_HOME/common
 export PATH=$IMPALA_HOME/bin:$PATH
 
 # Hadoop dependencies are snapshots in the Impala tree
-export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/
+#export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/
+export HADOOP_HOME=/root/nishidha/Imphala_prerequisites/hadoop-2.6.0-cdh5.5.1/src/hadoop-dist/target/hadoop-2.6.0-cdh5.5.1
+
 export HADOOP_CONF_DIR=$IMPALA_FE_DIR/src/test/resources
 
 : ${HADOOP_CLASSPATH=}

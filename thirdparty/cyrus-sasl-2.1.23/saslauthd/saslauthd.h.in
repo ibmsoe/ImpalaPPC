@@ -16,6 +16,15 @@
 /* Define to 1 if you have the <crypt.h> header file. */
 #undef HAVE_CRYPT_H
 
+/* Define to 1 if you have the <dlfcn.h> header file. */
+#undef HAVE_DLFCN_H
+
+/* Define to 1 if you have the `dns_lookup' function. */
+#undef HAVE_DNS_LOOKUP
+
+/* Define to 1 if you have the `dn_expand' function. */
+#undef HAVE_DN_EXPAND
+
 /* Define to 1 if you have the <fcntl.h> header file. */
 #undef HAVE_FCNTL_H
 
@@ -25,8 +34,14 @@
 /* Does compiler understand __FUNCTION__ */
 #undef HAVE_FUNCTION
 
+/* Do we have a getaddrinfo? */
+#undef HAVE_GETADDRINFO
+
 /* Define to 1 if you have the `gethostname' function. */
 #undef HAVE_GETHOSTNAME
+
+/* Do we have a getnameinfo() function? */
+#undef HAVE_GETNAMEINFO
 
 /* Define to 1 if you have the `getspnam' function. */
 #undef HAVE_GETSPNAM
@@ -36,6 +51,19 @@
 
 /* Include GSSAPI/Kerberos 5 Support */
 #undef HAVE_GSSAPI
+
+/* Define if you have the gssapi.h header file */
+#undef HAVE_GSSAPI_H
+
+/* Define to 1 if you have the `gsskrb5_register_acceptor_identity' function.
+   */
+#undef HAVE_GSSKRB5_REGISTER_ACCEPTOR_IDENTITY
+
+/* Define if your GSSAPI implimentation defines GSS_C_NT_HOSTBASED_SERVICE */
+#undef HAVE_GSS_C_NT_HOSTBASED_SERVICE
+
+/* Define if your GSSAPI implimentation defines GSS_C_NT_USER_NAME */
+#undef HAVE_GSS_C_NT_USER_NAME
 
 /* Include HTTP form Support */
 #undef HAVE_HTTPFORM
@@ -58,6 +86,9 @@
 /* Define to 1 if you have the `mkdir' function. */
 #undef HAVE_MKDIR
 
+/* Do we have OpenSSL? */
+#undef HAVE_OPENSSL
+
 /* Support for PAM? */
 #undef HAVE_PAM
 
@@ -70,8 +101,17 @@
 /* Include SIA Support */
 #undef HAVE_SIA
 
+/* Does sockaddr have an sa_len? */
+#undef HAVE_SOCKADDR_SA_LEN
+
 /* Define to 1 if you have the `socket' function. */
 #undef HAVE_SOCKET
+
+/* Do we have a socklen_t? */
+#undef HAVE_SOCKLEN_T
+
+/* Is there an ss_family in sockaddr_storage? */
+#undef HAVE_SS_FAMILY
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
@@ -118,8 +158,15 @@
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
+/* define if your compiler has __attribute__ */
+#undef HAVE___ATTRIBUTE__
+
 /* Using Heimdal */
 #undef KRB5_HEIMDAL
+
+/* Define to the sub-directory in which libtool stores uninstalled libraries.
+   */
+#undef LT_OBJDIR
 
 /* Name of package */
 #undef PACKAGE
@@ -150,6 +197,24 @@
 
 /* Saslauthd runs threaded? */
 #undef SASLAUTHD_THREADED
+
+/* Use BerkeleyDB for SASLdb */
+#undef SASL_BERKELEYDB
+
+/* Path to default SASLdb database */
+#undef SASL_DB_PATH
+
+/* Use GDBM for SASLdb */
+#undef SASL_GDBM
+
+/* Use NDBM for SASLdb */
+#undef SASL_NDBM
+
+/* The size of `long', as computed by sizeof. */
+#undef SIZEOF_LONG
+
+/* Link SASLdb Staticly */
+#undef STATIC_SASLDB
 
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
