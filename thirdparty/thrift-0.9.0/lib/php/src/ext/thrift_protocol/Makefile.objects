@@ -1,5 +1,5 @@
-php_thrift_protocol.lo: /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp
-	$(LIBTOOL) --mode=compile $(CXX)  -I. -I/root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol $(COMMON_FLAGS) $(CXXFLAGS_CLEAN) $(EXTRA_CXXFLAGS)  -c /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp -o php_thrift_protocol.lo 
+php_thrift_protocol.lo: /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp
+	$(LIBTOOL) --mode=compile $(CXX)  -I. -I/root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol $(COMMON_FLAGS) $(CXXFLAGS_CLEAN) $(EXTRA_CXXFLAGS) -prefer-pic -c /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp -o php_thrift_protocol.lo 
 $(phplibdir)/thrift_protocol.la: ./thrift_protocol.la
 	$(LIBTOOL) --mode=install cp ./thrift_protocol.la $(phplibdir)
 

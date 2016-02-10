@@ -1398,7 +1398,7 @@ bool AddFlagValidator(const void* flag_ptr, ValidateFnProto validate_fn_proto) {
 //    values in a global destructor.
 // --------------------------------------------------------------------
 
-FlagRegisterer::FlagRegisterer(const char* name, const char* type,
+GFLAGS_DLL_DECL FlagRegisterer::FlagRegisterer(const char* name, const char* type,
                                const char* help, const char* filename,
                                void* current_storage, void* defvalue_storage) {
   if (help == NULL)

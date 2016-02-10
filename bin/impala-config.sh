@@ -49,7 +49,7 @@ export IMPALA_TOOLCHAIN
 export DISABLE_IMPALA_TOOLCHAIN=1
 
 export CDH_MAJOR_VERSION=5
-export HADOOP_LZO=${HADOOP_LZO-$IMPALA_HOME/../hadoop-lzo}
+export HADOOP_LZO=${HADOOP_LZO-$IMPALA_HOME/../Imphala_prerequisites/hadoop-lzo}
 export IMPALA_LZO=${IMPALA_LZO-$IMPALA_HOME/../Impala-lzo}
 export IMPALA_AUX_TEST_HOME=${IMPALA_AUX_TEST_HOME-$IMPALA_HOME/../Impala-auxiliary-tests}
 export TARGET_FILESYSTEM=${TARGET_FILESYSTEM-"hdfs"}
@@ -211,7 +211,8 @@ export HADOOP_CONF_DIR=$IMPALA_FE_DIR/src/test/resources
 : ${HADOOP_CLASSPATH=}
 export HADOOP_CLASSPATH=$HADOOP_CLASSPATH:"${HADOOP_HOME}/share/hadoop/tools/lib/*"
 # YARN is configured to use LZO so the LZO jar needs to be in the hadoop classpath.
-export LZO_JAR_PATH="$HADOOP_LZO/build/hadoop-lzo-0.4.15.jar"
+#export LZO_JAR_PATH="$HADOOP_LZO/build/hadoop-lzo-0.4.15.jar"
+export LZO_JAR_PATH="$HADOOP_LZO/target/hadoop-lzo-0.4.20-SNAPSHOT.jar"
 HADOOP_CLASSPATH+=":$LZO_JAR_PATH"
 
 export MINI_DFS_BASE_DATA_DIR=$IMPALA_HOME/cdh-${CDH_MAJOR_VERSION}-hdfs-data
@@ -307,7 +308,7 @@ LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JAVA}`:`dirname ${LIB_JSIG}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JVM}`:`dirname ${LIB_HDFS}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/be/build/debug/service"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build/lib"
-LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$IMPALA_LZO/build"
+LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$IMPALA_LZO/target"
 
 if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
   LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_TOOLCHAIN}/gcc-${IMPALA_GCC_VERSION}/lib64"

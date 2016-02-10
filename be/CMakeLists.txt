@@ -244,14 +244,14 @@ set (IMPALA_LINK_LIBS
   Exprs
   GlobalFlags
   ImpalaThrift
+  ThriftSaslTransport
   ResourceBroker
   Rpc
   Runtime
   Scheduling
   Service
   Statestore
-  TestUtil
-  ThriftSaslTransport
+  TestUtil  
   Udf
   Util
   Webserver
@@ -295,8 +295,8 @@ set (IMPALA_LINK_LIBS ${IMPALA_LINK_LIBS}
   ${LBER_LIBRARY}
   ThriftSaslTransport
   gutil
-  gflagsstatic
   glogstatic
+  gflagsstatic
   pprofstatic
   ${HDFS_LIB}
   ${LIBZ}

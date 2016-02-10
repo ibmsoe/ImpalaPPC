@@ -52,7 +52,7 @@ build_libtool_libs=yes
 build_old_libs=yes
 
 # What type of objects to build.
-pic_mode=default
+pic_mode=yes
 
 # The host system.
 host_alias=

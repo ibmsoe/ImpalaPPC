@@ -5,7 +5,7 @@
 LIBS='-lssl -lcrypto -lrt -lpthread ' \
 './configure' \
 '--disable-option-checking' \
-'--prefix=/usr/local' \
-'--cache-file=/dev/null' \
-'--srcdir=.' \
+'--prefix=/usr' \
+'--with-pic' \
+'--build=powerpc64le-unknown-linux-gnu' \
 "$@"

@@ -4584,7 +4584,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
     exprs.clear();
     expected_offsets.clear();
     // With one expr, all offsets should be 0.
-    expected_offsets[t.GetByteSize()] = list_of(0);
+    expected_offsets[t.GetByteSize()] = list_of(0).convert_to_container<std::set<int> >();
     exprs.push_back(pool.Add(Literal::CreateLiteral(t, "0")));
     if (t.IsVarLenStringType()) {
       ValidateLayout(exprs, 16, 0, expected_offsets);

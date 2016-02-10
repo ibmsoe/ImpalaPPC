@@ -1,16 +1,16 @@
-srcdir = /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol
-builddir = /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol
-top_srcdir = /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol
-top_builddir = /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol
+srcdir = /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol
+builddir = /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol
+top_srcdir = /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol
+top_builddir = /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol
 EGREP = /bin/grep -E
 SED = /bin/sed
-CONFIGURE_COMMAND = './configure' '--disable-option-checking' '--prefix=/usr/local' '--cache-file=/dev/null' '--srcdir=.'
-CONFIGURE_OPTIONS = '--disable-option-checking' '--prefix=/usr/local' '--cache-file=/dev/null' '--srcdir=.'
+CONFIGURE_COMMAND = './configure' '--disable-option-checking' '--prefix=/usr' '--with-pic' '--build=powerpc64le-unknown-linux-gnu'
+CONFIGURE_OPTIONS = '--disable-option-checking' '--prefix=/usr' '--with-pic' '--build=powerpc64le-unknown-linux-gnu'
 SHLIB_SUFFIX_NAME = so
 SHLIB_DL_SUFFIX_NAME = so
 ZEND_EXT_TYPE = zend_extension
 RE2C = exit 0;
-AWK = nawk
+AWK = gawk
 THRIFT_PROTOCOL_SHARED_LIBADD = -lstdc++
 shared_objects_thrift_protocol = php_thrift_protocol.lo
 PHP_PECL_EXTENSION = thrift_protocol
@@ -22,7 +22,7 @@ prefix = /usr
 exec_prefix = $(prefix)
 libdir = ${exec_prefix}/lib
 prefix = /usr
-phplibdir = /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol/modules
+phplibdir = /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol/modules
 phpincludedir = /usr/include/php5
 CC = cc
 CFLAGS = -g -O2
@@ -32,7 +32,7 @@ CPPFLAGS = -DHAVE_CONFIG_H
 CXX = g++
 CXXFLAGS = -g -O2
 CXXFLAGS_CLEAN = $(CXXFLAGS)
-EXTENSION_DIR = /usr/lib/php5/20090626
+EXTENSION_DIR = /usr/lib/php5/20131226
 PHP_EXECUTABLE = /usr/bin/php
 EXTRA_LDFLAGS =
 EXTRA_LIBS =
@@ -162,8 +162,8 @@ distclean: clean
 
 .PHONY: all clean install distclean test
 .NOEXPORT:
-php_thrift_protocol.lo: /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp
-	$(LIBTOOL) --mode=compile $(CXX)  -I. -I/root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol $(COMMON_FLAGS) $(CXXFLAGS_CLEAN) $(EXTRA_CXXFLAGS)  -c /root/sandbox/apache/thrift/0.9.x/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp -o php_thrift_protocol.lo 
+php_thrift_protocol.lo: /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp
+	$(LIBTOOL) --mode=compile $(CXX)  -I. -I/root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol $(COMMON_FLAGS) $(CXXFLAGS_CLEAN) $(EXTRA_CXXFLAGS) -prefer-pic -c /root/nishidha/Impala/thirdparty/thrift-0.9.0/lib/php/src/ext/thrift_protocol/php_thrift_protocol.cpp -o php_thrift_protocol.lo 
 $(phplibdir)/thrift_protocol.la: ./thrift_protocol.la
 	$(LIBTOOL) --mode=install cp ./thrift_protocol.la $(phplibdir)
 

@@ -382,7 +382,7 @@ Function* CodegenCrcHash(LlvmCodeGen* codegen, bool mixed) {
   Value* data = builder.CreateGEP(args[1], offset);
 
   Value* seed = codegen->GetIntConstant(TYPE_INT, HashUtil::FNV_SEED);
-  seed = builder.CreateCall3(fixed_fn, data, dummy_len, seed);
+  seed = builder.CreateCall(fixed_fn, {data, dummy_len, seed});
 
   // Get the string data
   if (mixed) {
@@ -394,7 +394,7 @@ Function* CodegenCrcHash(LlvmCodeGen* codegen, bool mixed) {
     Value* str_len = builder.CreateStructGEP(nullptr, string_val, 1);
     str_ptr = builder.CreateLoad(str_ptr);
     str_len = builder.CreateLoad(str_len);
-    seed = builder.CreateCall3(string_hash_fn, str_ptr, str_len, seed);
+    seed = builder.CreateCall(string_hash_fn, {str_ptr, str_len, seed});
   }
 
   Value* result = builder.CreateGEP(args[2], counter);
