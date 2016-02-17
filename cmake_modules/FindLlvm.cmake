@@ -10,7 +10,6 @@
 find_program(LLVM_CONFIG_EXECUTABLE llvm-config
   PATHS
   ${LLVM_ROOT}/bin
-#  /usr/lib/llvm-3.6
   $ENV{LLVM_HOME}
   NO_DEFAULT_PATH
 )
@@ -87,7 +86,6 @@ execute_process(
 
 # CMake really doesn't like adding link directories and wants absolute paths
 # Reconstruct it with LLVM_MODULE_LIBS and LLVM_LIBRARY_DIR
-message(STATUS "LLVM libs before replace: ${LLVM_MODULE_LIBS}")
 string(REPLACE " " ";" LIBS_LIST ${LLVM_MODULE_LIBS})
 set (LLVM_MODULE_LIBS "-ldl")
 foreach (LIB ${LIBS_LIST})

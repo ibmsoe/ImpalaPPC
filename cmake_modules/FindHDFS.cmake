@@ -6,7 +6,6 @@
 #  HDFS_FOUND, If false, do not try to use ant
 #  hdfsstatic
 
-message(STATUS "HAddop Home: $ENV{HADOOP_HOME}")
 
 exec_program(hadoop ARGS version OUTPUT_VARIABLE Hadoop_VERSION
              RETURN_VALUE Hadoop_RETURN)

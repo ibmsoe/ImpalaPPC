@@ -36,7 +36,7 @@ find_library(LBER_STATIC_LIBRARY liblber.a
 
 if (NOT LDAP_STATIC_LIBRARY OR NOT LBER_STATIC_LIBRARY OR
     NOT LDAP_INCLUDE_DIR)
-  message(FATAL_ERROR "LDAP includes and libraries NOT found. ${OPENLDAP_ROOT}")
+  message(FATAL_ERROR "LDAP includes and libraries NOT found.")
   set(LDAP_FOUND FALSE)
 else()
   set(LDAP_FOUND TRUE)

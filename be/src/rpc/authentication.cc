@@ -311,7 +311,6 @@ static void ImpalaAuxpropLookup(void* glob_context, sasl_server_params_t* sparam
     string ustr(user, ulen);
     VLOG(2) << "Attempting to authenticate user \"" << ustr << "\"";
   }
-  //return SASL_OK;
 }
 
 // Singleton structure used to register our auxprop plugin with Sasl

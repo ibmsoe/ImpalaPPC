@@ -49,14 +49,14 @@ class HashUtil {
 
     const uint32_t* p = reinterpret_cast<const uint32_t*>(data);
     while (words--) {
-    hash = SSE4_crc32_u32(hash, *p);
-    ++p;
+      hash = SSE4_crc32_u32(hash, *p);
+      ++p;
     }
 
     const uint8_t* s = reinterpret_cast<const uint8_t*>(p);
     while (bytes--) {
-    hash = SSE4_crc32_u8(hash, *s);
-    ++s;
+      hash = SSE4_crc32_u8(hash, *s);
+      ++s;
     }
 #endif
     // The lower half of the CRC hash has has poor uniformity, so swap the halves

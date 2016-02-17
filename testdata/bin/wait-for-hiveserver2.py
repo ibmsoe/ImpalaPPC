@@ -37,6 +37,7 @@ parser.add_option("--transport", dest="transport", default="buffered",
 options, args = parser.parse_args()
 
 hs2_host, hs2_port = options.hs2_hostport.split(':')
+
 if options.transport == "plain_sasl":
   # Here we supply a bogus username of "foo" and a bogus password of "bar".
   # We just have to supply *something*, else HS2 will block waiting for user
@@ -51,7 +52,7 @@ hs2_client = LegacyTCLIService.Client(protocol)
 
 # Try to connect to the HiveServer2 service and create a session
 now = time.time()
-TIMEOUT_SECONDS = 120.0
+TIMEOUT_SECONDS = 30.0
 while time.time() - now < TIMEOUT_SECONDS:
   try:
     hs2_transport.open()

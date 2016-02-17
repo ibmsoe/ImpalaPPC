@@ -62,7 +62,6 @@ else(GTEST_INCLUDE_DIR AND GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
   set(GTEST_FOUND FALSE)
 endif(GTEST_INCLUDE_DIR AND GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
 
-
 if(GTEST_FOUND)
   if(NOT GTest_FIND_QUIETLY)
     message(STATUS "Found GTest: ${GTEST_LIBRARIES}")
@@ -70,7 +69,7 @@ if(GTEST_FOUND)
   add_library(gtest STATIC IMPORTED)
   set_target_properties(gtest PROPERTIES IMPORTED_LOCATION "${GTEST_LIBRARY}")
 else(GTEST_FOUND)
-  message(FATAL_ERROR "Could not find the GTest Library ${GTEST_ROOT}")
+  message(FATAL_ERROR "Could not find the GTest Library")
 endif(GTEST_FOUND)
 
 mark_as_advanced(

@@ -296,7 +296,7 @@ Status LlvmCodeGen::Init() {
   // blows up the fe tests (which take ~10-20 ms each).
   opt_level = CodeGenOpt::None;
 #endif
-  EngineBuilder builder(std::unique_ptr<Module>(module_));
+  //EngineBuilder builder(std::unique_ptr<Module>(module_));
   //builder.setOptLevel(opt_level);
   //TODO Uncomment the below line as soon as we upgrade to LLVM 3.5 to enable SSE, if
   // available. In LLVM 3.3 this is done automatically and cannot be enabled because
@@ -306,6 +306,7 @@ Status LlvmCodeGen::Init() {
   execution_engine_.reset(EngineBuilder(std::unique_ptr<Module>(module_))
                                  .setOptLevel(opt_level)
                                  .setErrorStr(&error_string_)
+                                 .setMCPU(llvm::sys::getHostCPUName())
                                  .create());
   if (execution_engine_ == NULL) {
     // execution_engine_ will take ownership of the module if it is created

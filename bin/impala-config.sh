@@ -44,8 +44,12 @@ fi
 : ${IMPALA_TOOLCHAIN=$IMPALA_HOME/toolchain}
 : ${USE_SYSTEM_GCC=0}
 
+# Disabling Tool chain for ppc
+#export USE_SYSTEM_GCC
+#export IMPALA_TOOLCHAIN
+#export DISABLE_IMPALA_TOOLCHAIN
 export USE_SYSTEM_GCC=1
-export IMPALA_TOOLCHAIN
+export IMPALA_TOOLCHAIN=""
 export DISABLE_IMPALA_TOOLCHAIN=1
 
 export CDH_MAJOR_VERSION=5
@@ -151,8 +155,8 @@ export IMPALA_THRIFT_JAVA_VERSION=0.9.0
 export IMPALA_ZLIB_VERSION=1.2.8
 
 # Some of the variables need to be overwritten to explicitely mark the patch level
-#if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
-if [[ $DISABLE_IMPALA_TOOLCHAIN == 0 ]]; then
+if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
+#if [[ $DISABLE_IMPALA_TOOLCHAIN == 0 ]]; then
   IMPALA_AVRO_VERSION+=-p3
   IMPALA_BZIP2_VERSION+=-p1
   IMPALA_GLOG_VERSION+=-p1
@@ -254,9 +258,8 @@ export HBASE_CONF_DIR=$HIVE_CONF_DIR
 
 # Optionally set the Thrift home to the toolchain
  
-echo "Value of disable toolchain $DISABLE_IMPALA_TOOLCHAIN "
-#if [[ -z $IMPALA_TOOLCHAIN ]]; then
-if [[ $DISABLE_IMPALA_TOOLCHAIN == 1 ]]; then
+if [[ -z $IMPALA_TOOLCHAIN ]]; then
+#if [[ $DISABLE_IMPALA_TOOLCHAIN == 1 ]]; then
   THRIFT_SRC_DIR=${IMPALA_HOME}/thirdparty/thrift-${IMPALA_THRIFT_VERSION}
   export THRIFT_HOME=${THRIFT_SRC_DIR}
 else

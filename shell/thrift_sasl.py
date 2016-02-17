@@ -70,7 +70,7 @@ class TSaslClientTransport(TTransportBase, CReadableTransport):
     ret, chosen_mech, initial_response = self.sasl.start(self.mechanism)
     if not ret:
       raise TTransportException(type=TTransportException.NOT_OPEN,
-        message=("Could not start SASL: %s " % self.sasl.getError()))
+        message=("Could not start SASL: %s" % self.sasl.getError()))
 
     # Send initial response
     self._send_message(self.START, chosen_mech)

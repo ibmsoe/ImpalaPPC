@@ -93,7 +93,6 @@ namespace SSEUtil {
 /// mode constant into the inline asm.
 #define SSE_ALWAYS_INLINE inline __attribute__ ((__always_inline__))
 
-//#if defined(__SSE2__)
 template<int MODE>
 static inline __m128i SSE4_cmpestrm(__m128i str1, int len1, __m128i str2, int len2) {
   /// Use asm reg rather than Yz output constraint to workaround LLVM bug 13199 -
@@ -127,7 +126,7 @@ static inline int64_t POPCNT_popcnt_u64(uint64_t a) {
   __asm__("popcntq %1, %0" : "=r"(result) : "mr"(a) : "cc");
   return result;
 }
-//#endif
+
 #undef SSE_ALWAYS_INLINE
 
 #elif defined(__SSE4_2__) // IR_COMPILE for SSE 4.2.
