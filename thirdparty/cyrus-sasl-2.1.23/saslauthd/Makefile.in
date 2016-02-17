@@ -99,13 +99,14 @@ am__aclocal_m4_deps = $(top_srcdir)/../cmulocal/berkdb.m4 \
 	$(top_srcdir)/../cmulocal/cyrus.m4 \
 	$(top_srcdir)/../cmulocal/init_automake.m4 \
 	$(top_srcdir)/../cmulocal/ipv6.m4 \
-	$(top_srcdir)/../cmulocal/libtool.m4 \
-	$(top_srcdir)/../cmulocal/ltoptions.m4 \
-	$(top_srcdir)/../cmulocal/ltsugar.m4 \
-	$(top_srcdir)/../cmulocal/ltversion.m4 \
-	$(top_srcdir)/../cmulocal/lt~obsolete.m4 \
 	$(top_srcdir)/../cmulocal/openssl.m4 \
-	$(top_srcdir)/../cmulocal/sasl2.m4 $(top_srcdir)/configure.ac
+	$(top_srcdir)/../cmulocal/sasl2.m4 \
+	$(top_srcdir)/cmulocal/libtool.m4 \
+	$(top_srcdir)/cmulocal/ltoptions.m4 \
+	$(top_srcdir)/cmulocal/ltsugar.m4 \
+	$(top_srcdir)/cmulocal/ltversion.m4 \
+	$(top_srcdir)/cmulocal/lt~obsolete.m4 \
+	$(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 DIST_COMMON = $(srcdir)/Makefile.am $(top_srcdir)/configure \
@@ -270,6 +271,7 @@ LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
 LIB_CRYPT = @LIB_CRYPT@
+LIB_DES = @LIB_DES@
 LIB_PAM = @LIB_PAM@
 LIB_SIA = @LIB_SIA@
 LIB_SOCKET = @LIB_SOCKET@
@@ -301,6 +303,7 @@ SASL_DB_INC = @SASL_DB_INC@
 SASL_DB_LIB = @SASL_DB_LIB@
 SASL_DB_MANS = @SASL_DB_MANS@
 SASL_DB_UTILS = @SASL_DB_UTILS@
+SASL_KRB_LIB = @SASL_KRB_LIB@
 SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@

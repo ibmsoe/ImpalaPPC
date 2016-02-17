@@ -212,9 +212,9 @@ if [[ -z $IMPALA_TOOLCHAIN ]]; then
   fi
 fi
 
-if [ -e $HADOOP_LZO/build/native/Linux-*-*/lib/libgplcompression.so ]
+if [ -e $HADOOP_LZO/target/native/Linux-*-*/lib/libgplcompression.so ]
 then
-  cp $HADOOP_LZO/build/native/Linux-*-*/lib/libgplcompression.* \
+  cp $HADOOP_LZO/target/native/Linux-*-*/lib/libgplcompression.* \
     $IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/lib/native/
 else
   echo "No hadoop-lzo found"

@@ -27,6 +27,10 @@ uname -v = #19-Ubuntu SMP Thu Oct 8 14:49:47 UTC 2015
 /usr/bin/oslevel       = unknown
 /bin/universe          = unknown
 
+PATH: /root/nishidha/Impala/thirdparty/hbase-1.0.0-cdh5.7.0-SNAPSHOT//bin
+PATH: /root/nishidha/Impala/thirdparty/hive-1.1.0-cdh5.7.0-SNAPSHOT//bin
+PATH: /root/nishidha/Imphala_prerequisites/hadoop-2.6.0-cdh5.5.1/src/hadoop-dist/target/hadoop-2.6.0-cdh5.5.1/bin
+PATH: /root/nishidha/Impala/bin
 PATH: /root/torch/install/bin
 PATH: /root/torch/install/bin
 PATH: /usr/local/apache-maven-3.0.5/bin

@@ -96,7 +96,8 @@ if [ -d ${THRIFT_HOME}/python/lib/python*/site-packages/thrift ]; then
   cp -r ${THRIFT_HOME}/python/lib/python*/site-packages/thrift\
         ${TARBALL_ROOT}/lib
 else
-  cp -r ${THRIFT_HOME}/python/lib64/python*/site-packages/thrift\
+#  cp -r ${THRIFT_HOME}/python/lib64/python*/site-packages/thrift\
+   cp -r /usr/lib/python*/site-packages/thrift\
         ${TARBALL_ROOT}/lib
 fi
 cp -r ${SHELL_HOME}/gen-py ${TARBALL_ROOT}

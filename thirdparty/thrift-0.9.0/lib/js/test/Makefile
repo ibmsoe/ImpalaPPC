@@ -98,7 +98,7 @@ CABAL_CONFIGURE_FLAGS =
 CC = gcc
 CCDEPMODE = depmode=gcc3
 CFLAGS = -g -O2
-CLASSPATH = :/usr/local/derby/lib/derby.jar:/usr/local/derby/lib/derbytools.jar
+CLASSPATH = /root/nishidha/Impala/../Imphala_prerequisites/hadoop-lzo/target/hadoop-lzo-0.4.20-SNAPSHOT.jar:/root/nishidha/Impala/fe/src/test/resources:/root/nishidha/Impala/fe/target/classes:/root/nishidha/Impala/fe/target/dependency::/usr/local/derby/lib/derby.jar:/usr/local/derby/lib/derbytools.jar
 CPP = gcc -E
 CPPFLAGS = 
 CXX = g++

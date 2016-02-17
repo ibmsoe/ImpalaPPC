@@ -67,7 +67,7 @@ if [ ! -z "${IMPALA_KERBERIZE}" ]; then
   # For hive-site.xml further down...
   export HIVE_S2_AUTH=KERBEROS
 else
-  export HIVE_S2_AUTH=NONE
+  export HIVE_S2_AUTH=NOSASL
 fi
 
 # Convert Metastore DB name to be lowercase

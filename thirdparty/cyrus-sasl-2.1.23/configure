@@ -663,11 +663,14 @@ LIB_PGSQL
 LIB_MYSQL
 PASSDSS_LIBS
 NTLM_LIBS
+PLAIN_LIBS
 GSSAPIBASE_LIBS
 GSSAPI_LIBS
 LIB_CRYPT
+SASL_KRB_LIB
 SRP_LIBS
 OTP_LIBS
+LIB_DES
 CMU_LIB_SUBDIR
 LIB_DOOR
 IPCTYPE
@@ -850,14 +853,17 @@ enable_checkapop
 enable_cram
 with_lib_subdir
 with_openssl
+with_des
 enable_digest
 enable_otp
 with_with_opie
 enable_srp
 enable_srp_setpass
+enable_krb4
 enable_gssapi
 with_gss_impl
 enable_gss_mutexes
+enable_plain
 enable_anon
 enable_login
 enable_ntlm
@@ -1524,8 +1530,10 @@ Optional Features:
   --enable-otp            enable OTP authentication [yes]
   --enable-srp            enable SRP authentication [no]
   --enable-srp-setpass    enable setting SRP secrets with saslpasswd [no]
+  --enable-krb4           enable KERBEROS_V4 authentication [no]
   --enable-gssapi=<DIR>   enable GSSAPI authentication [yes]
   --enable-gss_mutexes     use mutexes around calls to the GSS library
+  --enable-plain          enable PLAIN authentication yes
   --enable-anon           enable ANONYMOUS authentication [yes]
   --enable-login          enable unsupported LOGIN authentication [no]
   --enable-ntlm           enable unsupported NTLM authentication [no]
@@ -1559,6 +1567,7 @@ Optional Packages:
   --with-ipctype={unix,doors}    use ipctype [unix]
   --with-lib-subdir=DIR   Find libraries in DIR instead of lib
   --with-openssl=PATH     use OpenSSL from PATH
+  --with-des=DIR          with DES (look in DIR) yes
   --with-opie=PATH        use OPIE (One Time Passwords in Everything) from PATH
   --with-gss_impl={heimdal|mit|cybersafe|seam|auto}
                           choose specific GSSAPI implementation [[auto]]
@@ -13895,7 +13904,386 @@ $as_echo_n "checking for OpenSSL... " >&6; }
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_openssl" >&5
 $as_echo "$with_openssl" >&6; }
 
-SASL_DES_CHK
+
+
+# Check whether --with-des was given.
+if test "${with_des+set}" = set; then :
+  withval=$with_des; with_des=$withval
+else
+  with_des=yes
+fi
+
+
+LIB_DES=""
+if test "$with_des" != no; then
+  if test -d $with_des; then
+    CPPFLAGS="$CPPFLAGS -I${with_des}/include"
+    LDFLAGS="$LDFLAGS -L${with_des}/lib"
+  fi
+
+  if test "$with_openssl" != no; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for des_cbc_encrypt in -lcrypto" >&5
+$as_echo_n "checking for des_cbc_encrypt in -lcrypto... " >&6; }
+if ${ac_cv_lib_crypto_des_cbc_encrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcrypto $LIB_RSAREF $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char des_cbc_encrypt ();
+int
+main ()
+{
+return des_cbc_encrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_crypto_des_cbc_encrypt=yes
+else
+  ac_cv_lib_crypto_des_cbc_encrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_crypto_des_cbc_encrypt" >&5
+$as_echo "$ac_cv_lib_crypto_des_cbc_encrypt" >&6; }
+if test "x$ac_cv_lib_crypto_des_cbc_encrypt" = xyes; then :
+
+        ac_fn_c_check_header_mongrel "$LINENO" "openssl/des.h" "ac_cv_header_openssl_des_h" "$ac_includes_default"
+if test "x$ac_cv_header_openssl_des_h" = xyes; then :
+
+$as_echo "#define WITH_SSL_DES /**/" >>confdefs.h
+
+                                       LIB_DES="-lcrypto";
+                                       with_des=yes
+else
+  with_des=no
+fi
+
+
+else
+  with_des=no
+fi
+
+
+        if test "$with_des" = no; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for DES_cbc_encrypt in -lcrypto" >&5
+$as_echo_n "checking for DES_cbc_encrypt in -lcrypto... " >&6; }
+if ${ac_cv_lib_crypto_DES_cbc_encrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcrypto $LIB_RSAREF $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char DES_cbc_encrypt ();
+int
+main ()
+{
+return DES_cbc_encrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_crypto_DES_cbc_encrypt=yes
+else
+  ac_cv_lib_crypto_DES_cbc_encrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_crypto_DES_cbc_encrypt" >&5
+$as_echo "$ac_cv_lib_crypto_DES_cbc_encrypt" >&6; }
+if test "x$ac_cv_lib_crypto_DES_cbc_encrypt" = xyes; then :
+
+        ac_fn_c_check_header_mongrel "$LINENO" "openssl/des.h" "ac_cv_header_openssl_des_h" "$ac_includes_default"
+if test "x$ac_cv_header_openssl_des_h" = xyes; then :
+
+$as_echo "#define WITH_SSL_DES /**/" >>confdefs.h
+
+                                       LIB_DES="-lcrypto";
+                                       with_des=yes
+else
+  with_des=no
+fi
+
+
+else
+  with_des=no
+fi
+
+    fi
+  fi
+
+  if test "$with_des" = no; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for des_cbc_encrypt in -ldes" >&5
+$as_echo_n "checking for des_cbc_encrypt in -ldes... " >&6; }
+if ${ac_cv_lib_des_des_cbc_encrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-ldes  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char des_cbc_encrypt ();
+int
+main ()
+{
+return des_cbc_encrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_des_des_cbc_encrypt=yes
+else
+  ac_cv_lib_des_des_cbc_encrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_des_des_cbc_encrypt" >&5
+$as_echo "$ac_cv_lib_des_des_cbc_encrypt" >&6; }
+if test "x$ac_cv_lib_des_des_cbc_encrypt" = xyes; then :
+  LIB_DES="-ldes";
+                                        with_des=yes
+else
+  with_des=no
+fi
+
+  fi
+
+  if test "$with_des" = no; then
+     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for des_cbc_encrypt in -ldes425" >&5
+$as_echo_n "checking for des_cbc_encrypt in -ldes425... " >&6; }
+if ${ac_cv_lib_des425_des_cbc_encrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-ldes425  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char des_cbc_encrypt ();
+int
+main ()
+{
+return des_cbc_encrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_des425_des_cbc_encrypt=yes
+else
+  ac_cv_lib_des425_des_cbc_encrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_des425_des_cbc_encrypt" >&5
+$as_echo "$ac_cv_lib_des425_des_cbc_encrypt" >&6; }
+if test "x$ac_cv_lib_des425_des_cbc_encrypt" = xyes; then :
+  LIB_DES="-ldes425";
+                                       with_des=yes
+else
+  with_des=no
+fi
+
+  fi
+
+  if test "$with_des" = no; then
+     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for des_cbc_encrypt in -ldes524" >&5
+$as_echo_n "checking for des_cbc_encrypt in -ldes524... " >&6; }
+if ${ac_cv_lib_des524_des_cbc_encrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-ldes524  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char des_cbc_encrypt ();
+int
+main ()
+{
+return des_cbc_encrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_des524_des_cbc_encrypt=yes
+else
+  ac_cv_lib_des524_des_cbc_encrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_des524_des_cbc_encrypt" >&5
+$as_echo "$ac_cv_lib_des524_des_cbc_encrypt" >&6; }
+if test "x$ac_cv_lib_des524_des_cbc_encrypt" = xyes; then :
+  LIB_DES="-ldes524";
+                                       with_des=yes
+else
+  with_des=no
+fi
+
+  fi
+
+  if test "$with_des" = no; then
+
+            LIB_RSAREF=""
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for RSAPublicEncrypt in -lrsaref" >&5
+$as_echo_n "checking for RSAPublicEncrypt in -lrsaref... " >&6; }
+if ${ac_cv_lib_rsaref_RSAPublicEncrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lrsaref  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char RSAPublicEncrypt ();
+int
+main ()
+{
+return RSAPublicEncrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_rsaref_RSAPublicEncrypt=yes
+else
+  ac_cv_lib_rsaref_RSAPublicEncrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_rsaref_RSAPublicEncrypt" >&5
+$as_echo "$ac_cv_lib_rsaref_RSAPublicEncrypt" >&6; }
+if test "x$ac_cv_lib_rsaref_RSAPublicEncrypt" = xyes; then :
+  LIB_RSAREF="-lRSAglue -lrsaref"; cmu_have_rsaref=yes
+else
+  cmu_have_rsaref=no
+fi
+
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for des_cbc_encrypt in -lcrypto" >&5
+$as_echo_n "checking for des_cbc_encrypt in -lcrypto... " >&6; }
+if ${ac_cv_lib_crypto_des_cbc_encrypt+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcrypto $LIB_RSAREF $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char des_cbc_encrypt ();
+int
+main ()
+{
+return des_cbc_encrypt ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_crypto_des_cbc_encrypt=yes
+else
+  ac_cv_lib_crypto_des_cbc_encrypt=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_crypto_des_cbc_encrypt" >&5
+$as_echo "$ac_cv_lib_crypto_des_cbc_encrypt" >&6; }
+if test "x$ac_cv_lib_crypto_des_cbc_encrypt" = xyes; then :
+
+	ac_fn_c_check_header_mongrel "$LINENO" "openssl/des.h" "ac_cv_header_openssl_des_h" "$ac_includes_default"
+if test "x$ac_cv_header_openssl_des_h" = xyes; then :
+
+$as_echo "#define WITH_SSL_DES /**/" >>confdefs.h
+
+					LIB_DES="-lcrypto";
+					with_des=yes
+else
+  with_des=no
+fi
+
+
+else
+  with_des=no
+fi
+
+  fi
+fi
+
+if test "$with_des" != no; then
+
+$as_echo "#define WITH_DES /**/" >>confdefs.h
+
+fi
+
+
+
 
 # Check whether --enable-digest was given.
 if test "${enable_digest+set}" = set; then :
@@ -14110,7 +14498,318 @@ else
 $as_echo "disabled" >&6; }
 fi
 
-SASL_KERBEROS_V4_CHK
+
+
+
+  # Check whether --enable-krb4 was given.
+if test "${enable_krb4+set}" = set; then :
+  enableval=$enable_krb4; krb4=$enableval
+else
+  krb4=no
+fi
+
+
+  if test "$krb4" != no; then
+                { $as_echo "$as_me:${as_lineno-$LINENO}: checking for res_search in -lresolv" >&5
+$as_echo_n "checking for res_search in -lresolv... " >&6; }
+if ${ac_cv_lib_resolv_res_search+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lresolv  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char res_search ();
+int
+main ()
+{
+return res_search ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_resolv_res_search=yes
+else
+  ac_cv_lib_resolv_res_search=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_resolv_res_search" >&5
+$as_echo "$ac_cv_lib_resolv_res_search" >&6; }
+if test "x$ac_cv_lib_resolv_res_search" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBRESOLV 1
+_ACEOF
+
+  LIBS="-lresolv $LIBS"
+
+fi
+
+
+            if test -d ${krb4}; then
+       { $as_echo "$as_me:${as_lineno-$LINENO}: checking for Kerberos includes" >&5
+$as_echo_n "checking for Kerberos includes... " >&6; }
+if ${cyrus_krbinclude+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+         for krbhloc in include/kerberosIV include/kerberos include
+         do
+           if test -f ${krb4}/${krbhloc}/krb.h ; then
+             cyrus_krbinclude=${krb4}/${krbhloc}
+             break
+           fi
+         done
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $cyrus_krbinclude" >&5
+$as_echo "$cyrus_krbinclude" >&6; }
+
+       if test -n "${cyrus_krbinclude}"; then
+         CPPFLAGS="$CPPFLAGS -I${cyrus_krbinclude}"
+       fi
+       LDFLAGS="$LDFLAGS -L$krb4/lib"
+    fi
+
+    if test "$with_des" != no; then
+      ac_fn_c_check_header_mongrel "$LINENO" "krb.h" "ac_cv_header_krb_h" "$ac_includes_default"
+if test "x$ac_cv_header_krb_h" = xyes; then :
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for com_err in -lcom_err" >&5
+$as_echo_n "checking for com_err in -lcom_err... " >&6; }
+if ${ac_cv_lib_com_err_com_err+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcom_err  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char com_err ();
+int
+main ()
+{
+return com_err ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_com_err_com_err=yes
+else
+  ac_cv_lib_com_err_com_err=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_com_err_com_err" >&5
+$as_echo "$ac_cv_lib_com_err_com_err" >&6; }
+if test "x$ac_cv_lib_com_err_com_err" = xyes; then :
+
+	  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for krb_mk_priv in -lkrb" >&5
+$as_echo_n "checking for krb_mk_priv in -lkrb... " >&6; }
+if ${ac_cv_lib_krb_krb_mk_priv+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lkrb $LIB_DES -lcom_err $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char krb_mk_priv ();
+int
+main ()
+{
+return krb_mk_priv ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_krb_krb_mk_priv=yes
+else
+  ac_cv_lib_krb_krb_mk_priv=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_krb_krb_mk_priv" >&5
+$as_echo "$ac_cv_lib_krb_krb_mk_priv" >&6; }
+if test "x$ac_cv_lib_krb_krb_mk_priv" = xyes; then :
+  COM_ERR="-lcom_err"; SASL_KRB_LIB="-lkrb"; krb4lib="yes"
+else
+  krb4lib=no
+fi
+
+else
+
+    	  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for krb_mk_priv in -lkrb" >&5
+$as_echo_n "checking for krb_mk_priv in -lkrb... " >&6; }
+if ${ac_cv_lib_krb_krb_mk_priv+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lkrb $LIB_DES $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char krb_mk_priv ();
+int
+main ()
+{
+return krb_mk_priv ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_krb_krb_mk_priv=yes
+else
+  ac_cv_lib_krb_krb_mk_priv=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_krb_krb_mk_priv" >&5
+$as_echo "$ac_cv_lib_krb_krb_mk_priv" >&6; }
+if test "x$ac_cv_lib_krb_krb_mk_priv" = xyes; then :
+  COM_ERR=""; SASL_KRB_LIB="-lkrb"; krb4lib="yes"
+else
+  krb4lib=no
+fi
+
+fi
+
+else
+  krb4="no"
+fi
+
+
+
+      if test "$krb4" != "no" -a "$krb4lib" = "no"; then
+	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for krb_mk_priv in -lkrb4" >&5
+$as_echo_n "checking for krb_mk_priv in -lkrb4... " >&6; }
+if ${ac_cv_lib_krb4_krb_mk_priv+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lkrb4 $LIB_DES $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char krb_mk_priv ();
+int
+main ()
+{
+return krb_mk_priv ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_krb4_krb_mk_priv=yes
+else
+  ac_cv_lib_krb4_krb_mk_priv=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_krb4_krb_mk_priv" >&5
+$as_echo "$ac_cv_lib_krb4_krb_mk_priv" >&6; }
+if test "x$ac_cv_lib_krb4_krb_mk_priv" = xyes; then :
+  COM_ERR=""; SASL_KRB_LIB="-lkrb4"; krb4=yes
+else
+  krb4=no
+fi
+
+      fi
+      if test "$krb4" = no; then
+          { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: No Kerberos V4 found" >&5
+$as_echo "$as_me: WARNING: No Kerberos V4 found" >&2;}
+      fi
+    else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: No DES library found for Kerberos V4 support" >&5
+$as_echo "$as_me: WARNING: No DES library found for Kerberos V4 support" >&2;}
+      krb4=no
+    fi
+  fi
+
+  if test "$krb4" != no; then
+    cmu_save_LIBS="$LIBS"
+    LIBS="$LIBS $SASL_KRB_LIB"
+    for ac_func in krb_get_err_text
+do :
+  ac_fn_c_check_func "$LINENO" "krb_get_err_text" "ac_cv_func_krb_get_err_text"
+if test "x$ac_cv_func_krb_get_err_text" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_KRB_GET_ERR_TEXT 1
+_ACEOF
+
+fi
+done
+
+    LIBS="$cmu_save_LIBS"
+  fi
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking KERBEROS_V4" >&5
+$as_echo_n "checking KERBEROS_V4... " >&6; }
+  if test "$krb4" != no; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: enabled" >&5
+$as_echo "enabled" >&6; }
+    SASL_MECHS="$SASL_MECHS libkerberos4.la"
+    SASL_STATIC_SRCS="$SASL_STATIC_SRCS ../plugins/kerberos4.c"
+    SASL_STATIC_OBJS="$SASL_STATIC_OBJS kerberos4.o"
+
+$as_echo "#define STATIC_KERBEROS4 /**/" >>confdefs.h
+
+
+$as_echo "#define HAVE_KRB /**/" >>confdefs.h
+
+    SASL_KRB_LIB="$SASL_KRB_LIB $LIB_DES $COM_ERR"
+  else
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: disabled" >&5
+$as_echo "disabled" >&6; }
+  fi
+
+
 ac_fn_c_check_func "$LINENO" "crypt" "ac_cv_func_crypt"
 if test "x$ac_cv_func_crypt" = xyes; then :
   cmu_have_crypt=yes
@@ -14864,7 +15563,43 @@ $as_echo "#define GSS_USE_MUTEXES /**/" >>confdefs.h
 $as_echo "$use_gss_mutexes" >&6; }
 fi
 
-SASL_PLAIN_CHK
+
+
+
+ # Check whether --enable-plain was given.
+if test "${enable_plain+set}" = set; then :
+  enableval=$enable_plain; plain=$enableval
+else
+  plain=yes
+fi
+
+
+ PLAIN_LIBS=""
+ if test "$plain" != no; then
+    if test "$cmu_have_crypt" = yes; then
+    PLAIN_LIBS=$LIB_CRYPT
+  fi
+ fi
+
+
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking PLAIN" >&5
+$as_echo_n "checking PLAIN... " >&6; }
+ if test "$plain" != no; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: enabled" >&5
+$as_echo "enabled" >&6; }
+  SASL_MECHS="$SASL_MECHS libplain.la"
+  if test "$enable_static" = yes; then
+    SASL_STATIC_OBJS="$SASL_STATIC_OBJS plain.o"
+    SASL_STATIC_SRCS="$SASL_STATIC_SRCS ../plugins/plain.c"
+
+$as_echo "#define STATIC_PLAIN /**/" >>confdefs.h
+
+  fi
+ else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: disabled" >&5
+$as_echo "disabled" >&6; }
+ fi
+
 
 # Check whether --enable-anon was given.
 if test "${enable_anon+set}" = set; then :

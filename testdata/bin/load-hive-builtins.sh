@@ -33,7 +33,7 @@ ${HADOOP_HOME}/bin/hadoop fs -put ${HADOOP_HOME}/share/hadoop/tools/lib/*.jar \
 
 ${HADOOP_HOME}/bin/hadoop fs -rm -r -f ${FILESYSTEM_PREFIX}${HADOOP_LZO}/build
 ${HADOOP_HOME}/bin/hadoop fs -mkdir -p ${FILESYSTEM_PREFIX}${HADOOP_LZO}/build
-${HADOOP_HOME}/bin/hadoop fs -put ${HADOOP_LZO}/build/hadoop-lzo*.jar \
+${HADOOP_HOME}/bin/hadoop fs -put ${HADOOP_LZO}/target/hadoop-lzo*.jar \
     ${FILESYSTEM_PREFIX}${HADOOP_LZO}/build/
 
 ${HADOOP_HOME}/bin/hadoop fs -rm -r -f ${FILESYSTEM_PREFIX}${SENTRY_HOME}/lib/
