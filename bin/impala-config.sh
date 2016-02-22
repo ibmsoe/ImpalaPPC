@@ -156,7 +156,6 @@ export IMPALA_ZLIB_VERSION=1.2.8
 
 # Some of the variables need to be overwritten to explicitely mark the patch level
 if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
-#if [[ $DISABLE_IMPALA_TOOLCHAIN == 0 ]]; then
   IMPALA_AVRO_VERSION+=-p3
   IMPALA_BZIP2_VERSION+=-p1
   IMPALA_GLOG_VERSION+=-p1
@@ -259,7 +258,6 @@ export HBASE_CONF_DIR=$HIVE_CONF_DIR
 # Optionally set the Thrift home to the toolchain
  
 if [[ -z $IMPALA_TOOLCHAIN ]]; then
-#if [[ $DISABLE_IMPALA_TOOLCHAIN == 1 ]]; then
   THRIFT_SRC_DIR=${IMPALA_HOME}/thirdparty/thrift-${IMPALA_THRIFT_VERSION}
   export THRIFT_HOME=${THRIFT_SRC_DIR}
 else

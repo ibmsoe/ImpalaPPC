@@ -42,7 +42,7 @@ SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFI
 
 # On Apple we build with clang and need libstdc++ instead of libc++
 if (APPLE)
-  SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -stdlib=libstdc++ ")
+  SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -stdlib=libstdc++")
 endif()
 
 SET(CXX_COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage")
