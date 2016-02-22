@@ -60,10 +60,6 @@ namespace llvm {
 
   template<bool preserveName>
   class IRBuilderDefaultInserter;
-  /*namespace legacy {
-    class FunctionPassManager;
-    class PassManager;
-  }*/
 }
 
 

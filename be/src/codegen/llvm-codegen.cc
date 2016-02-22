@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "codegen/llvm-codegen.h"
-#include <llvm/IR/LegacyPassManager.h>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -29,7 +28,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm-c/Linker.h>
 #include <llvm-c/ExecutionEngine.h>
-#include <llvm/IR/PassManager.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Host.h>
 #include <llvm/IR/InstIterator.h>
@@ -59,6 +58,9 @@
 #include "common/names.h"
 
 using namespace llvm;
+using llvm::legacy::FunctionPassManager;
+using llvm::legacy::PassManager;
+
 using std::fstream;
 
 DEFINE_bool(print_llvm_ir_instruction_count, false,
@@ -735,66 +737,13 @@ void LlvmCodeGen::OptimizeModule() {
     exported_fn_names.push_back(fns_to_jit_compile_[i].first->getName().data());
   }
 
-/***********************************************************************************
-  scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
-  module_pass_manager->addPass(new DataLayout(data_layout_str));
-  module_pass_manager->addPass(createInternalizePass(exported_fn_names));
-  module_pass_manager->addPass(createGlobalDCEPass());
-  module_pass_manager->run(*module_);
-
-  // Create and run function pass manager
-  scoped_ptr<llvm::FunctionPassManager> fn_pass_manager(new llvm::FunctionPassManager());
-  fn_pass_manager->addPass(new DataLayout(data_layout_str));
-  pass_builder.populateFunctionPassManager(*fn_pass_manager);
-  fn_pass_manager->doInitialization();
-  for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
-    if (!it->isDeclaration()) fn_pass_manager->run(*it);
-  }
-  fn_pass_manager->doFinalization();
-
-  // Create and run module pass manager
-  module_pass_manager.reset(new ModulePassManager());
-  module_pass_manager->addPass(new DataLayout(data_layout_str));
-// TODO: Check this at runtime
-  pass_builder.populateModulePassManager(*module_pass_manager);
-  module_pass_manager->run(*module_); */
-
-/***********************************************************************************/
-
-/******************** Using new PassManagers ****************************************
-  scoped_ptr<ModulePassManager> module_pass_manager(new ModulePassManager());
-  module_pass_manager->addPass(new DataLayout(data_layout_str));
-  module_pass_manager->addPass(createInternalizePass(exported_fn_names));
-  module_pass_manager->addPass(createGlobalDCEPass());
-  module_pass_manager->run(*module_);
-
-  // Create and run function pass manager
-  scoped_ptr<FunctionPassManager> fn_pass_manager(new FunctionPassManager(module_));
-  fn_pass_manager->addPass(new DataLayout(data_layout_str));
-//  pass_builder.populateFunctionPassManager(*fn_pass_manager);
-//  fn_pass_manager->doInitialization();
-  for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
-    if (!it->isDeclaration()) fn_pass_manager->run(*it);
-  }
-//  fn_pass_manager->doFinalization();
-
-  // Create and run module pass manager
-  module_pass_manager.reset(new ModulePassManager());
-  module_pass_manager->addPass(new DataLayout(data_layout_str));
-//  pass_builder.populateModulePassManager(*module_pass_manager);
-  module_pass_manager->run(*module_);*/
-
-/***********************************************************************************/
-
-  scoped_ptr<legacy::PassManager> module_pass_manager(new legacy::PassManager());
-  //module_pass_manager->add(new DataLayout(data_layout_str));
+  scoped_ptr<PassManager> module_pass_manager(new PassManager());
   module_pass_manager->add(createInternalizePass(exported_fn_names));
   module_pass_manager->add(createGlobalDCEPass());
   module_pass_manager->run(*module_);
 
   // Create and run function pass manager
-  scoped_ptr<legacy::FunctionPassManager> fn_pass_manager(new legacy::FunctionPassManager(module_));
-  //fn_pass_manager->add(new DataLayout(data_layout_str));
+  scoped_ptr<FunctionPassManager> fn_pass_manager(new FunctionPassManager(module_));
   pass_builder.populateFunctionPassManager(*fn_pass_manager);
   fn_pass_manager->doInitialization();
   for (Module::iterator it = module_->begin(), end = module_->end(); it != end ; ++it) {
@@ -803,11 +752,9 @@ void LlvmCodeGen::OptimizeModule() {
   fn_pass_manager->doFinalization();
 
   // Create and run module pass manager
-  module_pass_manager.reset(new legacy::PassManager());
-//  module_pass_manager->add(new DataLayout(data_layout_str));
+  module_pass_manager.reset(new PassManager());
   pass_builder.populateModulePassManager(*module_pass_manager);
   module_pass_manager->run(*module_);
-
 
   if (FLAGS_print_llvm_ir_instruction_count) {
     for (int i = 0; i < fns_to_jit_compile_.size(); ++i) {
