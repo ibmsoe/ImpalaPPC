@@ -78,7 +78,7 @@ GENERATE_SCHEMA_CMD = "generate-schema-statements.py --exploration_strategy=%s "
 # a datafile instead of doing INSERTs.
 HIVE_CMD = os.path.join(os.environ['HIVE_HOME'], 'bin/beeline')
 
-hive_auth = "auth=none"
+hive_auth = "auth=noSasl"
 if options.use_kerberos:
   if not options.principal:
     print "--principal is required when --use_kerberos is specified"
