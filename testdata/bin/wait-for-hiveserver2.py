@@ -52,7 +52,7 @@ hs2_client = LegacyTCLIService.Client(protocol)
 
 # Try to connect to the HiveServer2 service and create a session
 now = time.time()
-TIMEOUT_SECONDS = 30.0
+TIMEOUT_SECONDS = 120.0
 while time.time() - now < TIMEOUT_SECONDS:
   try:
     hs2_transport.open()
