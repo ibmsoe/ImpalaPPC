@@ -22,7 +22,6 @@
 #include <iostream>
 #include <fstream>
 #ifdef __ALTIVEC__
-#warning "Skipping SSE2 instructions for PPC TODO:: Fix this!!!!"
 #include <altivec.h>
 #elif __MMX__
 #include <mmintrin.h>

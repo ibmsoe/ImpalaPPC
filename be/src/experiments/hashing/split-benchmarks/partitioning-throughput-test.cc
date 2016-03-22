@@ -8,7 +8,7 @@
 #include "util/cpu-info.h"
 #include "util/debug-util.h"
 #include "util/stopwatch.h"
-
+//#include "util/vec128int.h"
 #define STREAMING true
 
 using namespace impala;
@@ -65,9 +65,15 @@ class PartitioningThroughputTest  {
       // TODO code very dependent on size of ProbeTuple.
       DCHECK_EQ(buffer_buffer->count % 2, 0);
       for (int i = 0; i < buffer_buffer->count; i += 2) {
+#ifdef __SSE2__
         __m128i content = _mm_set_epi64x(*(long long*) (buffer_buffer->tuples + i),
                                          *(long long*) (buffer_buffer->tuples + i + 1));
         _mm_stream_si128(buffer_write_ptr + i/2, content);
+#else
+        __m128i content = vec_set2sd(*(long long*) (buffer_buffer->tuples + i),
+                                         *(long long*) (buffer_buffer->tuples + i + 1));
+        vec_store1q(buffer_write_ptr + i/2, content);     
+#endif
       }
       buffer->count += buffer_buffer->count;
       buffer_buffer->count = 0;

@@ -128,8 +128,9 @@ class BitUtil {
     } else {
       return PopcountNoHw(x);
     }
-    #else
-      #warning "Popcount is not supported on POWER. TODO:: Fix this!!!"
+    #elif __ALTIVEC__
+      return vec_popcount1uw(x);
+    #else 
       return PopcountNoHw(x);
     #endif
   }
