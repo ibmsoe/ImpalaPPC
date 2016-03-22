@@ -16,15 +16,11 @@
 #ifndef IMPALA_UTIL_SSE_UTIL_H
 #define IMPALA_UTIL_SSE_UTIL_H
 
-#ifdef __ALTIVEC__
-#define VECLIB_VSX
-#warning "Skipping SSE2 instructions for PPC TODO:: Fix this!!!!"
-#include "util/veclib_types.h"
-#include <altivec.h>
-#elif __SSE2__
+#ifdef __SSE2__
 #include <emmintrin.h>
 #endif
 
+#include "util/veclib_headers.h"
 namespace impala {
 
 /// This class contains constants useful for text processing with SSE4.2 intrinsics.
@@ -105,10 +101,14 @@ static inline __m128i SSE4_cmpestrm(__m128i str1, int len1, __m128i str2, int le
 
 template<int MODE>
 static inline int SSE4_cmpestri(__m128i str1, int len1, __m128i str2, int len2) {
+#ifdef __SSE4_2__
   int result;
   __asm__("pcmpestri %5, %2, %1"
       : "=c"(result) : "x"(str1), "xm"(str2), "a"(len1), "d"(len2), "i"(MODE) : "cc");
   return result;
+#else
+  return vec_comparelengthstringstoindex1q(str1, len1, str2, len2, MODE);
+#endif
 }
 
 static inline uint32_t SSE4_crc32_u8(uint32_t crc, uint8_t v) {
@@ -140,13 +140,21 @@ static inline int64_t POPCNT_popcnt_u64(uint64_t a) {
 template<int MODE>
 static inline __m128i SSE4_cmpestrm(
     __m128i str1, int len1, __m128i str2, int len2) {
+#ifdef __SSE4_2__
   return _mm_cmpestrm(str1, len1, str2, len2, MODE);
+#else
+  return vec_comparelengthstringstomask1q(str1, len1, str2, len2, MODE);
+#endif
 }
 
 template<int MODE>
 static inline int SSE4_cmpestri(
     __m128i str1, int len1, __m128i str2, int len2) {
+#ifdef __SSE4_2__
   return _mm_cmpestri(str1, len1, str2, len2, MODE);
+#else
+  return vec_comparelengthstringstoindex1q(str1, len1, str2, len2, MODE);
+#endif
 }
 
 #define SSE4_crc32_u8 _mm_crc32_u8

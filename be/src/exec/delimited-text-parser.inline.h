@@ -101,8 +101,6 @@ inline void DelimitedTextParser::ParseSse(int max_tuples,
     FieldLocation* field_locations,
     int* num_tuples, int* num_fields, char** next_column_start) {
 
-#ifdef __SSE4_2_
-#warning "TODO: Fix this for PPC!!!"
 
   DCHECK(CpuInfo::IsSupported(CpuInfo::SSE4_2));
 
@@ -136,16 +134,29 @@ inline void DelimitedTextParser::ParseSse(int max_tuples,
     // can contain non-zero values.
     // _mm_extract_epi16 will extract 16 bits out of the xmm register.  The second
     // parameter specifies which 16 bits to extract (0 for the lowest 16 bits).
+
+#ifdef __SSE4_2_
     xmm_delim_mask = SSE4_cmpestrm<SSEUtil::STRCHR_MODE>(xmm_delim_search_,
         num_delims_, xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER);
+#elif __ALTIVEC__
+    xmm_delim_mask = vec_comparelengthstringstomask1q(xmm_delim_search_,
+        num_delims_, xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER, SSEUtil::STRCHR_MODE);
+#endif
+
     uint16_t delim_mask = _mm_extract_epi16(xmm_delim_mask, 0);
 
     uint16_t escape_mask = 0;
     // If the table does not use escape characters, skip processing for it.
     if (process_escapes) {
       DCHECK(escape_char_ != '\0');
+#ifdef __SSE4_2_
       xmm_escape_mask = SSE4_cmpestrm<SSEUtil::STRCHR_MODE>(xmm_escape_search_, 1,
           xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER);
+#elif __ALTIVEC__
+      xmm_escape_mask = vec_comparelengthstringstomask1q(xmm_escape_search_, 1,
+          xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER, SSEUtil::STRCHR_MODE);
+#endif
+
       escape_mask = _mm_extract_epi16(xmm_escape_mask, 0);
       ProcessEscapeMask(escape_mask, &last_char_is_escape_, &delim_mask);
     }
@@ -218,16 +229,12 @@ inline void DelimitedTextParser::ParseSse(int max_tuples,
     *remaining_len -= SSEUtil::CHARS_PER_128_BIT_REGISTER;
     *byte_buffer_ptr += SSEUtil::CHARS_PER_128_BIT_REGISTER;
   }
-#endif
 }
 
 /// Simplified version of ParseSSE which does not handle tuple delimiters.
 template <bool process_escapes>
 inline void DelimitedTextParser::ParseSingleTuple(int64_t remaining_len, char* buffer,
     FieldLocation* field_locations, int* num_fields) {
-
-#ifdef __SSE4_2_
-#warning "TODO: Fix this for PPC!!!"
 
   char* next_column_start = buffer;
   __m128i xmm_buffer, xmm_delim_mask, xmm_escape_mask;
@@ -239,16 +246,27 @@ inline void DelimitedTextParser::ParseSingleTuple(int64_t remaining_len, char* b
       // Load the next 16 bytes into the xmm register
       xmm_buffer = _mm_loadu_si128(reinterpret_cast<__m128i*>(buffer));
 
+#ifdef __SSE4_2_
       xmm_delim_mask = SSE4_cmpestrm<SSEUtil::STRCHR_MODE>(xmm_delim_search_,
           num_delims_, xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER);
+#elif __ALTIVEC__
+      xmm_delim_mask = vec_comparelengthstringstomask1q(xmm_delim_search_,
+          num_delims_, xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER, SSEUtil::STRCHR_MODE);
+#endif
       uint16_t delim_mask = _mm_extract_epi16(xmm_delim_mask, 0);
 
       uint16_t escape_mask = 0;
       // If the table does not use escape characters, skip processing for it.
       if (process_escapes) {
         DCHECK(escape_char_ != '\0');
+
+#ifdef __SSE4_2_
         xmm_escape_mask = SSE4_cmpestrm<SSEUtil::STRCHR_MODE>(xmm_escape_search_, 1,
             xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER);
+#elif __ALTIVEC__
+        xmm_escape_mask = vec_comparelengthstringstomask1q(xmm_escape_search_, 1,
+            xmm_buffer, SSEUtil::CHARS_PER_128_BIT_REGISTER, SSEUtil::STRCHR_MODE);
+#endif
         escape_mask = _mm_extract_epi16(xmm_escape_mask, 0);
         ProcessEscapeMask(escape_mask, &last_char_is_escape_, &delim_mask);
       }
@@ -310,7 +328,6 @@ inline void DelimitedTextParser::ParseSingleTuple(int64_t remaining_len, char* b
   // pad with empty cols if the input is ragged.
   FillColumns<process_escapes>(buffer - next_column_start,
         &next_column_start, num_fields, field_locations);
-#endif
 }
 }
 

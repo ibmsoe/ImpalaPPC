@@ -38,7 +38,7 @@ PROJECT(ASSEMBLER)
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wall -Wno-sign-compare -Wno-unknown-pragmas -pthread")
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -fno-strict-aliasing")
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wno-deprecated")
-SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG -mvsx")
+SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG -mpower8-vector")
 
 # On Apple we build with clang and need libstdc++ instead of libc++
 if (APPLE)
@@ -52,11 +52,11 @@ SET(CXX_COVERAGE_FLAGS "-fprofile-arcs -ftest-coverage")
 #        makes extra calls to clang which may have extra includes (-I) that are unused.
 #   -fcolor-diagnostics: ensure clang generates colorized output, which is necessary
 #        when using ccache as clang thinks it is not called from a terminal.
-SET(CXX_CLANG_FLAGS "-Qunused-arguments -fcolor-diagnostics -Wno-unused-local-typedef")
+SET(CXX_CLANG_FLAGS "-Qunused-arguments -fcolor-diagnostics -Wno-unused-local-typedef -faltivec")
 # For any gcc builds:
 #   -g: Enable symbols for profiler tools
 #   -Wno-unused-local-typedefs: Do not warn for local typedefs that are unused.
-SET(CXX_GCC_FLAGS "-g -Wno-unused-local-typedefs")
+SET(CXX_GCC_FLAGS "-g -Wno-unused-local-typedefs -mpower8-vector")
 
 # compiler flags for different build types (run 'cmake -DCMAKE_BUILD_TYPE=<type> .')
 # For CMAKE_BUILD_TYPE=Debug
@@ -102,7 +102,7 @@ endif ()
 # LLMV_CFLAGS - Adding llvm compile flags
 SET(CMAKE_CXX_FLAGS "${CXX_COMMON_FLAGS} ${CMAKE_CXX_FLAGS}")
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fverbose-asm")
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CFLAGS}")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CFLAGS} -mvsx -mpower8-vector")
 
 # Use ccache when found and not explicitly disabled by setting the DISABLE_CCACHE envvar.
 find_program(CCACHE ccache)
@@ -128,7 +128,7 @@ add_definitions(-DHAVE_INTTYPES_H -DHAVE_NETINET_IN_H -DHAVE_NETDB_H)
 # Note that we don't enable any optimization. We want unoptimized IR since we will be
 # modifying it at runtime, then re-compiling (and optimizing) the modified code. The final
 # optimizations will be less effective if the initial code is also optimized.
-set(CLANG_IR_CXX_FLAGS "-emit-llvm" "-c" "-DIR_COMPILE" "-DNDEBUG"
+set(CLANG_IR_CXX_FLAGS "-emit-llvm" "-faltivec" "-c" "-DIR_COMPILE" "-DNDEBUG"
   "-DHAVE_INTTYPES_H" "-DHAVE_NETINET_IN_H" "-DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG")
 
 # setup doc generation with Doxygen

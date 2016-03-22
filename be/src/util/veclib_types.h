@@ -32,6 +32,8 @@
 /* on some compilers: __declspec (align (N)) */
 /* in C++ 11:         alignas (N) */
 
+#define NOT_ALWAYS_INLINE
+
 /* Control inlining */
 #ifdef NOT_ALWAYS_INLINE
   #define VECLIB_INLINE
@@ -166,16 +168,16 @@ typedef
     __m64                     as_m64               [2];
     vector signed   char      as_vector_signed_char;
     vector unsigned char      as_vector_unsigned_char;
-//    vector bool     char      as_vector_bool_char;
+    vector bool     char      as_vector_bool_char;
     vector signed   short     as_vector_signed_short;
     vector unsigned short     as_vector_unsigned_short;
-//    vector bool     short     as_vector_bool_short;
+    vector bool     short     as_vector_bool_short;
     vector signed   int       as_vector_signed_int;
     vector unsigned int       as_vector_unsigned_int;
-//    vector bool     int       as_vector_bool_int;
+    vector bool     int       as_vector_bool_int;
     vector signed   long long as_vector_signed_long_long;
     vector unsigned long long as_vector_unsigned_long_long;
-//    vector bool     long long as_vector_bool_long_long;
+    vector bool     long long as_vector_bool_long_long;
     char                      as_char              [16];
     short                     as_short             [8];
     int                       as_int               [4];
@@ -200,16 +202,16 @@ typedef
     __m64                     as_m64               [2];
     vector signed   char      as_vector_signed_char;
     vector unsigned char      as_vector_unsigned_char;
-//    vector bool     char      as_vector_bool_char;
+    vector bool     char      as_vector_bool_char;
     vector signed   short     as_vector_signed_short;
     vector unsigned short     as_vector_unsigned_short;
-//    vector bool     short     as_vector_bool_short;
+    vector bool     short     as_vector_bool_short;
     vector signed   int       as_vector_signed_int;
     vector unsigned int       as_vector_unsigned_int;
-//    vector bool     int       as_vector_bool_int;
+    vector bool     int       as_vector_bool_int;
     vector signed   long long as_vector_unsigned_long_long;
     vector unsigned long long as_vector_signed_long_long;
-//    vector bool     long long as_vector_bool_long_long;
+    vector bool     long long as_vector_bool_long_long;
     char                      as_char              [16];
     short                     as_short             [8];
     int                       as_int               [4];
@@ -245,16 +247,16 @@ typedef
     __m64                     as_m64                        [4];
     vector signed   char      as_vector_signed_char         [2];
     vector unsigned char      as_vector_unsigned_char       [2];
-//    vector bool     char      as_vector_bool_char           [2];
+    vector bool     char      as_vector_bool_char           [2];
     vector signed   short     as_vector_signed_short        [2];
     vector unsigned short     as_vector_unsigned_short      [2];
-//    vector bool     short     as_vector_bool_short          [2];
+    vector bool     short     as_vector_bool_short          [2];
     vector signed   int       as_vector_signed_int          [2];
     vector unsigned int       as_vector_unsigned_int        [2];
-//    vector bool     int       as_vector_bool_int            [2];
+    vector bool     int       as_vector_bool_int            [2];
     vector signed   long long as_vector_signed_long_long    [2];
     vector unsigned long long as_vector_unsigned_long_long  [2];
-//    vector bool     long long as_vector_bool_long_long      [2];
+    vector bool     long long as_vector_bool_long_long      [2];
     char                      as_char                       [32];
     short                     as_short                      [16];
     int                       as_int                        [8];
@@ -284,16 +286,16 @@ typedef
     __m64                     as_m64                        [4];
     vector signed   char      as_vector_signed_char         [2];
     vector unsigned char      as_vector_unsigned_char       [2];
-//    vector bool     char      as_vector_bool_char           [2];
+    vector bool     char      as_vector_bool_char           [2];
     vector signed   short     as_vector_signed_short        [2];
     vector unsigned short     as_vector_unsigned_short      [2];
-//    vector bool     short     as_vector_bool_short          [2];
+    vector bool     short     as_vector_bool_short          [2];
     vector signed   int       as_vector_signed_int          [2];
     vector unsigned int       as_vector_unsigned_int        [2];
-//    vector bool     int       as_vector_bool_int            [2];
+    vector bool     int       as_vector_bool_int            [2];
     vector signed   long long as_vector_unsigned_long_long  [2];
     vector unsigned long long as_vector_signed_long_long    [2];
-//    vector bool     long long as_vector_bool_long_long      [2];
+    vector bool     long long as_vector_bool_long_long      [2];
     vector float              as_vector_float               [2];
     char                      as_char                       [32];
     short                     as_short                      [16];
