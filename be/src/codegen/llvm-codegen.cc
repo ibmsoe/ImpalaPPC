@@ -153,8 +153,8 @@ Status LlvmCodeGen::LoadFromMemory(ObjectPool* pool, MemoryBuffer* module_ir,
 Status LlvmCodeGen::LoadModuleFromFile(LlvmCodeGen* codegen, const string& file,
       llvm::Module** module) {
   
-  MemoryBuffer* buf = NULL;  
   // TODO:: Check this at runtime!!!
+  std::unique_ptr<MemoryBuffer> memBuffer;
   size_t fileBufferSize = 0;
   {
     SCOPED_TIMER(codegen->load_module_timer_);
@@ -165,12 +165,11 @@ Status LlvmCodeGen::LoadModuleFromFile(LlvmCodeGen* codegen, const string& file,
       ss << "Could not load module " << file << ": " << EC.message();
       return Status(ss.str());
     }
-    fileBufferSize = (*BufferOrErr)->getBufferSize();
-    buf = BufferOrErr->release();
+	memBuffer = std::move(BufferOrErr.get());
   }
 
-  COUNTER_ADD(codegen->module_file_size_, fileBufferSize );
-  return LoadModuleFromMemory(codegen, buf, file, module);
+  COUNTER_ADD(codegen->module_file_size_, memBuffer.get()->getBufferSize());
+  return LoadModuleFromMemory(codegen, memBuffer.get(), file, module);
 }
 
 Status LlvmCodeGen::LoadModuleFromMemory(LlvmCodeGen* codegen, MemoryBuffer* module_ir,
