@@ -39,11 +39,26 @@ if [ -z $IMPALA_HOME ]; then
   fi
 fi
 
-# Setting up Impala binary toolchain.
 : ${DISABLE_IMPALA_TOOLCHAIN=0}
 : ${IMPALA_TOOLCHAIN=$IMPALA_HOME/toolchain}
 : ${USE_SYSTEM_GCC=0}
 
+# Gold is available on newer systems and a full build with static linking is ~1.5 mins
+# faster using gold. A shared object build using gold is a little faster than using ld.
+: ${USE_GOLD_LINKER=false}
+
+# Override the default compiler by setting a path to the new compiler. The default
+# compiler depends on USE_SYSTEM_GCC, DISABLE_IMPALA_TOOLCHAIN, and IMPALA_GCC_VERSION.
+# The intended use case is to set the compiler to distcc, in that case the user would
+# also set IMPALA_BUILD_THREADS to increase parallelism.
+: ${IMPALA_CXX_COMPILER=default}
+
+export DISABLE_IMPALA_TOOLCHAIN
+export IMPALA_TOOLCHAIN
+export USE_SYSTEM_GCC
+export USE_GOLD_LINKER
+export IMPALA_CXX_COMPILER
+export IS_OSX=$(if [[ "$OSTYPE" == "darwin"* ]]; then echo true; else echo false; fi)
 # Disabling Tool chain for ppc
 #export USE_SYSTEM_GCC
 #export IMPALA_TOOLCHAIN
@@ -51,6 +66,62 @@ fi
 export USE_SYSTEM_GCC=1
 export IMPALA_TOOLCHAIN=""
 export DISABLE_IMPALA_TOOLCHAIN=1
+
+# To use a local build of Kudu, set KUDU_BUILD_DIR to the path Kudu was built in and
+# set KUDU_CLIENT_DIR to the path KUDU was installed in.
+# Example:
+#   git clone https://github.com/cloudera/kudu.git
+#   ...build 3rd party etc...
+#   mkdir -p $KUDU_BUILD_DIR
+#   cd $KUDU_BUILD_DIR
+#   cmake <path to Kudu source dir>
+#   make
+#   DESTDIR=$KUDU_CLIENT_DIR make install
+: ${KUDU_BUILD_DIR=}
+: ${KUDU_CLIENT_DIR=}
+export KUDU_BUILD_DIR
+export KUDU_CLIENT_DIR
+if [[ -n $KUDU_BUILD_DIR && -z $KUDU_CLIENT_DIR ]]; then
+  echo When KUDU_BUILD_DIR is set KUDU_CLIENT_DIR must also be set. 1>&2
+  return 1
+fi
+if [[ -z $KUDU_BUILD_DIR && -n $KUDU_CLIENT_DIR ]]; then
+  echo When KUDU_CLIENT_DIR is set KUDU_BUILD_DIR must also be set. 1>&2
+  return 1
+fi
+
+: ${USE_KUDU_DEBUG_BUILD=false}   # Only applies when using Kudu from the toolchain
+export USE_KUDU_DEBUG_BUILD
+
+# Kudu doesn't compile on some old Linux distros. KUDU_IS_SUPPORTED enables building Kudu
+# into the backend. The frontend build is OS independent since it is Java.
+export KUDU_IS_SUPPORTED=true
+if [[ -z $KUDU_BUILD_DIR ]]; then
+  if [[ $DISABLE_IMPALA_TOOLCHAIN -eq 1 ]]; then
+    KUDU_IS_SUPPORTED=false
+  elif ! $IS_OSX; then
+    if ! which lsb_release &>/dev/null; then
+      echo Unable to find the 'lsb_release' command. \
+          Please ensure it is available in your PATH. 1>&2
+      return 1
+    fi
+    DISTRO_VERSION=$(lsb_release -sir 2>&1)
+    if [[ $? -ne 0 ]]; then
+      echo lsb_release cammond failed, output was: "$DISTRO_VERSION" 1>&2
+      return 1
+    fi
+    # Remove spaces, trim minor versions, and convert to lowercase.
+    DISTRO_VERSION=$(tr -d ' \n' <<< "$DISTRO_VERSION" | cut -d. -f1 | tr "A-Z" "a-z")
+    case "$DISTRO_VERSION" in
+      # "enterprise" is Oracle
+      centos5 | debian6 | enterprise*5 | redhat*5 | suse*11 | ubuntu*12)
+          KUDU_IS_SUPPORTED=false;;
+    esac
+  fi
+fi
+
+# Always disable Kudu for now until some build problems are fixed.
+KUDU_IS_SUPPORTED=false
 
 export CDH_MAJOR_VERSION=5
 export HADOOP_LZO=${HADOOP_LZO-$IMPALA_HOME/../Imphala_prerequisites/hadoop-lzo}
@@ -66,6 +137,7 @@ export ISILON_NAMENODE=${ISILON_NAMENODE-""}
 export DEFAULT_FS=${DEFAULT_FS-"hdfs://localhost:20500"}
 export WAREHOUSE_LOCATION_PREFIX=${WAREHOUSE_LOCATION_PREFIX-""}
 export LOCAL_FS="file:${WAREHOUSE_LOCATION_PREFIX}"
+export METASTORE_DB="hive_impala"
 
 if [ "${TARGET_FILESYSTEM}" = "s3" ]; then
   # Basic error checking
@@ -138,9 +210,11 @@ export IMPALA_CYRUS_SASL_VERSION=2.1.23
 export IMPALA_GCC_VERSION=4.9.2
 export IMPALA_GFLAGS_VERSION=2.0
 export IMPALA_GLOG_VERSION=0.3.2
-export IMPALA_GPERFTOOLS_VERSION=2.0
+export IMPALA_GPERFTOOLS_VERSION=2.5
 export IMPALA_GTEST_VERSION=1.6.0
+export IMPALA_KUDU_VERSION=0.7.0.p0.425
 export IMPALA_LLVM_VERSION=3.7.0
+export IMPALA_LLVM_DEBUG_VERSION=3.7.0
 export IMPALA_LLVM_ASAN_VERSION=3.7.0
 export IMPALA_LZ4_VERSION=svn
 export IMPALA_MIN_BOOST_VERSION=1.46.0
@@ -156,14 +230,24 @@ export IMPALA_ZLIB_VERSION=1.2.8
 
 # Some of the variables need to be overwritten to explicitely mark the patch level
 if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
-  IMPALA_AVRO_VERSION+=-p3
+  IMPALA_AVRO_VERSION+=-p4
   IMPALA_BZIP2_VERSION+=-p1
   IMPALA_GLOG_VERSION+=-p1
-  IMPALA_GPERFTOOLS_VERSION+=-p1
   IMPALA_THRIFT_VERSION+=-p2
   IMPALA_RE2_VERSION+=-p1
-  IMPALA_LLVM_VERSION+=-p1
+  IMPALA_LLVM_VERSION+=-no-asserts-p1
+  # Debug builds should use the default release-with-assertions build from the toolchain
+  # Note that the default toolchain build of 3.7 and trunk is release with no assertions,
+  # so this will need to be revisited when upgrading the LLVM version.
+  IMPALA_LLVM_DEBUG_VERSION+=-p1
 fi
+
+export KUDU_MASTER=${KUDU_MASTER:-"127.0.0.1"}
+export KUDU_MASTER_PORT=${KUDU_MASTER_PORT:-"7051"}
+# TODO: Figure out a way to use a snapshot version without causing a lot of breakage due
+#       to nightly changes from Kudu. The version below is the last released version but
+#       before release this needs to be updated to the version about to be released.
+export KUDU_JAVA_VERSION=0.6.0
 
 if [[ $OSTYPE == "darwin"* ]]; then
   IMPALA_CYRUS_SASL_VERSION=2.1.26
@@ -188,12 +272,12 @@ else
   export IMPALA_CYRUS_SASL_INSTALL_DIR=${IMPALA_HOME}/thirdparty/cyrus-sasl-${IMPALA_CYRUS_SASL_VERSION}/build
 fi
 
-export IMPALA_HADOOP_VERSION=2.6.0-cdh5.7.0-SNAPSHOT
-export IMPALA_HBASE_VERSION=1.0.0-cdh5.7.0-SNAPSHOT
-export IMPALA_HIVE_VERSION=1.1.0-cdh5.7.0-SNAPSHOT
-export IMPALA_SENTRY_VERSION=1.5.1-cdh5.7.0-SNAPSHOT
-export IMPALA_LLAMA_VERSION=1.0.0-cdh5.7.0-SNAPSHOT
-export IMPALA_PARQUET_VERSION=1.5.0-cdh5.7.0-SNAPSHOT
+export IMPALA_HADOOP_VERSION=2.6.0-cdh5.8.0-SNAPSHOT
+export IMPALA_HBASE_VERSION=1.2.0-cdh5.8.0-SNAPSHOT
+export IMPALA_HIVE_VERSION=1.1.0-cdh5.8.0-SNAPSHOT
+export IMPALA_SENTRY_VERSION=1.5.1-cdh5.8.0-SNAPSHOT
+export IMPALA_LLAMA_VERSION=1.0.0-cdh5.8.0-SNAPSHOT
+export IMPALA_PARQUET_VERSION=1.5.0-cdh5.8.0-SNAPSHOT
 export IMPALA_MINIKDC_VERSION=1.0.0
 
 export IMPALA_FE_DIR=$IMPALA_HOME/fe
@@ -243,6 +327,9 @@ export AUX_CLASSPATH="${LZO_JAR_PATH}"
 ### Tell hive not to use jline
 export HADOOP_USER_CLASSPATH_FIRST=true
 
+# Export the location of Postgres JDBC driver so Sentry can pick it up.
+export POSTGRES_JDBC_DRIVER="$JDBC_DRIVER"
+
 export HBASE_HOME=$IMPALA_HOME/thirdparty/hbase-${IMPALA_HBASE_VERSION}/
 export PATH=$HBASE_HOME/bin:$PATH
 
@@ -271,7 +358,8 @@ fi
 
 export CLUSTER_DIR=${IMPALA_HOME}/testdata/cluster
 
-export IMPALA_BUILD_THREADS=`nproc`
+: ${IMPALA_BUILD_THREADS:=$(nproc)}
+export IMPALA_BUILD_THREADS
 
 # Some environments (like the packaging build) might not have $USER set.  Fix that here.
 export USER=${USER-`id -un`}
@@ -296,7 +384,13 @@ export LIBHDFS_OPTS="${LIBHDFS_OPTS}:${IMPALA_HOME}/be/build/debug/service"
 
 export ARTISTIC_STYLE_OPTIONS=$IMPALA_BE_DIR/.astylerc
 
-export JAVA_LIBRARY_PATH=${IMPALA_HOME}/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build/lib
+if [[ -z "${IMPALA_TOOLCHAIN}" ]]; then
+  IMPALA_SNAPPY_PATH=${IMPALA_HOME}/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build/lib
+else
+  IMPALA_SNAPPY_PATH=${IMPALA_TOOLCHAIN}/snappy-${IMPALA_SNAPPY_VERSION}/lib
+fi
+
+export JAVA_LIBRARY_PATH=${IMPALA_SNAPPY_PATH}
 
 # So that the frontend tests and PlanService can pick up libbackend.so
 # and other required libraries
@@ -308,7 +402,7 @@ LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JAVA}`:`dirname ${LIB_JSIG}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JVM}`:`dirname ${LIB_HDFS}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/be/build/debug/service"
-LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build/lib"
+LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_SNAPPY_PATH}"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$IMPALA_LZO/target"
 
 if [[ -n "$IMPALA_TOOLCHAIN" ]]; then

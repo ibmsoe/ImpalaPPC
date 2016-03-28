@@ -210,14 +210,15 @@ public class FileSystemUtil {
   }
 
   /**
-   * Returns true if the given Path contains any sub directories, otherwise false.
+   * Returns true if the given Path contains any visible sub directories, otherwise false.
    */
-  public static boolean containsSubdirectory(Path directory)
+  public static boolean containsVisibleSubdirectory(Path directory)
       throws FileNotFoundException, IOException {
     FileSystem fs = directory.getFileSystem(CONF);
     // Enumerate all the files in the source
     for (FileStatus fStatus: fs.listStatus(directory)) {
-      if (fStatus.isDirectory()) {
+      String pathName = fStatus.getPath().getName();
+      if (fStatus.isDirectory() && !isHiddenFile(pathName)) {
         return true;
       }
     }
@@ -320,6 +321,20 @@ public class FileSystemUtil {
       return false;
     }
   }
+
+  /**
+   * Copies the source file to a destination path on the local filesystem and returns true
+   * if successful.
+   */
+   public static boolean copyToLocal(Path source, Path dest) {
+     try {
+       FileSystem fs = source.getFileSystem(CONF);
+       fs.copyToLocalFile(source, dest);
+     } catch (IOException e) {
+       return false;
+     }
+     return true;
+   }
 
   /**
    * Return true if the path can be reached, false for all other cases

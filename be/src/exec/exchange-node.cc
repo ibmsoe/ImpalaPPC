@@ -22,9 +22,12 @@
 #include "runtime/row-batch.h"
 #include "util/debug-util.h"
 #include "util/runtime-profile.h"
+#include "util/time.h"
 #include "gen-cpp/PlanNodes_types.h"
 
 #include "common/names.h"
+
+DECLARE_int32(stress_datastream_recvr_delay_ms);
 
 using namespace impala;
 
@@ -48,8 +51,8 @@ ExchangeNode::ExchangeNode(
   DCHECK(is_merging_ || (offset_ == 0));
 }
 
-Status ExchangeNode::Init(const TPlanNode& tnode) {
-  RETURN_IF_ERROR(ExecNode::Init(tnode));
+Status ExchangeNode::Init(const TPlanNode& tnode, RuntimeState* state) {
+  RETURN_IF_ERROR(ExecNode::Init(tnode, state));
   if (!is_merging_) return Status::OK();
 
   RETURN_IF_ERROR(sort_exec_exprs_.Init(tnode.exchange_node.sort_info, pool_));
@@ -61,6 +64,13 @@ Status ExchangeNode::Init(const TPlanNode& tnode) {
 Status ExchangeNode::Prepare(RuntimeState* state) {
   RETURN_IF_ERROR(ExecNode::Prepare(state));
   convert_row_batch_timer_ = ADD_TIMER(runtime_profile(), "ConvertRowBatchTime");
+
+#ifndef NDEBUG
+  if (FLAGS_stress_datastream_recvr_delay_ms > 0) {
+    SleepForMs(FLAGS_stress_datastream_recvr_delay_ms);
+  }
+#endif
+
   // TODO: figure out appropriate buffer size
   DCHECK_GT(num_senders_, 0);
   stream_recvr_ = ExecEnv::GetInstance()->stream_mgr()->CreateRecvr(state,

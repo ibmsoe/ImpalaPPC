@@ -122,8 +122,7 @@ class MemTracker {
     }
 
     if (consumption_metric_ != NULL) {
-      DCHECK(parent_ == NULL);
-      consumption_->Set(consumption_metric_->value());
+      RefreshConsumptionFromMetric();
       return;
     }
     if (UNLIKELY(enable_logging_)) LogUpdate(true, bytes);
@@ -160,10 +159,10 @@ class MemTracker {
   /// are updated.
   /// Returns true if the try succeeded.
   bool TryConsume(int64_t bytes) {
-    if (consumption_metric_ != NULL) consumption_->Set(consumption_metric_->value());
-    if (bytes <= 0) return true;
+    if (consumption_metric_ != NULL) RefreshConsumptionFromMetric();
+    if (UNLIKELY(bytes <= 0)) return true;
     if (UNLIKELY(enable_logging_)) LogUpdate(true, bytes);
-    int i = 0;
+    int i;
     // Walk the tracker tree top-down, to avoid expanding a limit on a child whose parent
     // won't accommodate the change.
     for (i = all_trackers_.size() - 1; i >= 0; --i) {
@@ -175,16 +174,32 @@ class MemTracker {
         // If TryConsume fails, we can try to GC or expand the RM reservation, but we may
         // need to try several times if there are concurrent consumers because we don't
         // take a lock before trying to update consumption_.
-        bool fail_consume = false;
-        while (!tracker->consumption_->TryAdd(bytes, limit)) {
+        while (true) {
+          if (LIKELY(tracker->consumption_->TryAdd(bytes, limit))) break;
+
           VLOG_RPC << "TryConsume failed, bytes=" << bytes
                    << " consumption=" << tracker->consumption_->current_value()
                    << " limit=" << limit << " attempting to GC and expand reservation";
           // TODO: This may not be right if more than one tracker can actually change its
           // RM reservation limit.
-          if (tracker->GcMemory(limit - bytes) && !tracker->ExpandRmReservation(bytes)) {
-            fail_consume = true;
-            break;
+          if (UNLIKELY(tracker->GcMemory(limit - bytes) &&
+                  !tracker->ExpandRmReservation(bytes))) {
+            DCHECK_GE(i, 0);
+            // Failed for this mem tracker. Roll back the ones that succeeded.
+            // TODO: this doesn't roll it back completely since the max values for
+            // the updated trackers aren't decremented. The max values are only used
+            // for error reporting so this is probably okay. Rolling those back is
+            // pretty hard; we'd need something like 2PC.
+            //
+            // TODO: This might leave us with an allocated resource that we can't use.
+            // Specifically, the RM reservation of some ancestors' trackers may have been
+            // expanded only to fail at the current tracker. This may be wasteful as
+            // subsequent TryConsume() never gets to use the reserved resources. Consider
+            // adjusting the reservation of the ancestors' trackers.
+            for (int j = all_trackers_.size() - 1; j > i; --j) {
+              all_trackers_[j]->consumption_->Add(-bytes);
+            }
+            return false;
           }
           VLOG_RPC << "GC or expansion succeeded, TryConsume bytes=" << bytes
                    << " consumption=" << tracker->consumption_->current_value()
@@ -192,25 +207,11 @@ class MemTracker {
           // Need to update the limit if the RM reservation was expanded.
           limit = tracker->effective_limit();
         }
-        if (fail_consume) break;
       }
     }
     // Everyone succeeded, return.
-    if (i == -1) return true;
-
-    // Someone failed, roll back the ones that succeeded.
-    // TODO: this doesn't roll it back completely since the max values for
-    // the updated trackers aren't decremented. The max values are only used
-    // for error reporting so this is probably okay. Rolling those back is
-    // pretty hard; we'd need something like 2PC.
-    //
-    // TODO: This might leave us with an allocated resource that we can't use. Do we need
-    // to adjust the consumption of the query tracker to stop the resource from never
-    // getting used by a subsequent TryConsume()?
-    for (int j = all_trackers_.size() - 1; j > i; --j) {
-      all_trackers_[j]->consumption_->Add(-bytes);
-    }
-    return false;
+    DCHECK_EQ(i, -1);
+    return true;
   }
 
   /// Decreases consumption of this tracker and its ancestors by 'bytes'.
@@ -220,7 +221,7 @@ class MemTracker {
       return;
     }
 
-    if (UNLIKELY(released_memory_since_gc_.UpdateAndFetch(bytes)) > GC_RELEASE_SIZE) {
+    if (UNLIKELY(released_memory_since_gc_.Add(bytes) > GC_RELEASE_SIZE)) {
       GcTcmalloc();
     }
 
@@ -284,6 +285,9 @@ class MemTracker {
     return result;
   }
 
+  /// Refresh the value of consumption_. Only valid to call if consumption_metric_ is not
+  /// null.
+  void RefreshConsumptionFromMetric();
 
   int64_t limit() const { return limit_; }
   bool has_limit() const { return limit_ >= 0; }
@@ -300,6 +304,12 @@ class MemTracker {
     }
     return v;
   }
+
+  /// Returns the memory 'reserved' by this resource pool mem tracker, which is the sum
+  /// of the memory reserved by the queries in it (i.e. its child trackers). The mem
+  /// reserved for a query is its limit_, if set (which should be the common case with
+  /// admission control). Otherwise the current consumption is used.
+  int64_t GetPoolMemReserved() const;
 
   /// Returns the memory consumed in bytes.
   int64_t consumption() const { return consumption_->current_value(); }
@@ -330,6 +340,11 @@ class MemTracker {
     enable_logging_ = enable;
     log_stack_ = log_stack;
   }
+
+  /// Log the memory usage when memory limit is exceeded and return a status object with
+  /// details of the allocation which caused the limit to be exceeded.
+  Status MemLimitExceeded(RuntimeState* state, const std::string& details,
+      int64_t failed_allocation);
 
   static const std::string COUNTER_NAME;
 
@@ -379,10 +394,10 @@ class MemTracker {
 
   /// Total amount of memory from calls to Release() since the last GC. If this
   /// is greater than GC_RELEASE_SIZE, this will trigger a tcmalloc gc.
-  static AtomicInt<int64_t> released_memory_since_gc_;
+  static AtomicInt64 released_memory_since_gc_;
 
   /// Lock to protect GcMemory(). This prevents many GCs from occurring at once.
-  SpinLock gc_lock_;
+  boost::mutex gc_lock_;
 
   /// Protects request_to_mem_trackers_ and pool_to_mem_trackers_
   static boost::mutex static_mem_trackers_lock_;
@@ -432,8 +447,9 @@ class MemTracker {
   std::vector<MemTracker*> all_trackers_;  // this tracker plus all of its ancestors
   std::vector<MemTracker*> limit_trackers_;  // all_trackers_ with valid limits
 
-  /// All the child trackers of this tracker. Used for error reporting only.
-  /// i.e., Updating a parent tracker does not update the children.
+  /// All the child trackers of this tracker. Used only for computing resource pool mem
+  /// reserved and error reporting, i.e., updating a parent tracker does not update its
+  /// children.
   mutable boost::mutex child_trackers_lock_;
   std::list<MemTracker*> child_trackers_;
 
@@ -479,6 +495,9 @@ class MemTracker {
   /// and the limit was exceeded pre-GC. -1 if there is no limit or the limit was never
   /// exceeded.
   IntGauge* bytes_over_limit_metric_;
+
+  /// Metric for limit_.
+  IntGauge* limit_metric_;
 };
 
 }

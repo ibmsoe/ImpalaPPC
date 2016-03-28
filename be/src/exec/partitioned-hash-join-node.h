@@ -23,6 +23,7 @@
 
 #include "exec/blocking-join-node.h"
 #include "exec/exec-node.h"
+#include "exec/filter-context.h"
 #include "exec/hash-table.h"
 #include "runtime/buffered-block-mgr.h"
 
@@ -30,9 +31,11 @@
 
 namespace impala {
 
+class BloomFilter;
 class BufferedBlockMgr;
 class MemPool;
 class RowBatch;
+class RuntimeFilter;
 class TupleRow;
 class BufferedTupleStream;
 
@@ -60,7 +63,7 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
       const DescriptorTbl& descs);
   virtual ~PartitionedHashJoinNode();
 
-  virtual Status Init(const TPlanNode& tnode);
+  virtual Status Init(const TPlanNode& tnode, RuntimeState* state);
   virtual Status Prepare(RuntimeState* state);
   virtual Status Open(RuntimeState* state);
   virtual Status GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos);
@@ -248,27 +251,25 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
   /// Prepares for probing the next batch.
   void ResetForProbe();
 
-  /// For each 'probe_expr_' in 'ht_ctx' that is a slot ref, allocate a bitmap filter on
-  /// that slot. Returns false if it should not add probe filters.
-  bool AllocateProbeFilters(RuntimeState* state);
+  /// For each filter in filters_, allocate a bloom_filter from the fragment-local
+  /// RuntimeFilterBank and store it in runtime_filters_ to populate during the build
+  /// phase. Returns false if filter construction is disabled.
+  bool AllocateRuntimeFilters(RuntimeState* state);
 
-  /// Attach the probe filters to runtime state.
-  bool AttachProbeFilters(RuntimeState* state);
-
-  /// Cleanup and free memory for probe filters.
-  void CleanupProbeFilters();
+  /// Publish the runtime filters to the fragment-local RuntimeFilterBank.
+  void PublishRuntimeFilters(RuntimeState* state);
 
   /// Codegen function to create output row. Assumes that the probe row is non-NULL.
-  llvm::Function* CodegenCreateOutputRow(LlvmCodeGen* codegen);
+  Status CodegenCreateOutputRow(LlvmCodeGen* codegen, llvm::Function** fn);
 
   /// Codegen processing build batches.  Identical signature to ProcessBuildBatch.
-  /// Returns false if codegen was not possible.
-  bool CodegenProcessBuildBatch(
+  /// Returns non-OK status if codegen was not possible.
+  Status CodegenProcessBuildBatch(
       RuntimeState* state, llvm::Function* hash_fn, llvm::Function* murmur_hash_fn);
 
   /// Codegen processing probe batches.  Identical signature to ProcessProbeBatch.
-  /// Returns false if codegen was not possible.
-  bool CodegenProcessProbeBatch(
+  /// Returns non-OK if codegen was not possible.
+  Status CodegenProcessProbeBatch(
       RuntimeState* state, llvm::Function* hash_fn, llvm::Function* murmur_hash_fn);
 
   /// Returns the current state of the partition as a string.
@@ -295,6 +296,13 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
   /// build_expr_ctxs_ (over child(1)) and probe_expr_ctxs_ (over child(0))
   std::vector<ExprContext*> probe_expr_ctxs_;
   std::vector<ExprContext*> build_expr_ctxs_;
+
+  /// List of filters to build during build phase.
+  std::vector<FilterContext> filters_;
+
+  /// is_not_distinct_from_[i] is true if and only if the ith equi-join predicate is IS
+  /// NOT DISTINCT FROM, rather than equality.
+  std::vector<bool> is_not_distinct_from_;
 
   /// Non-equi-join conjuncts from the ON clause.
   std::vector<ExprContext*> other_join_conjunct_ctxs_;
@@ -343,6 +351,9 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
   /// The largest fraction (of build side) after repartitioning. This is expected to be
   /// 1 / PARTITION_FANOUT. A value much larger indicates skew.
   RuntimeProfile::HighWaterMarkCounter* largest_partition_percent_;
+
+  /// Number of hash collisions - unequal rows that have identical hash values
+  RuntimeProfile::Counter* num_hash_collisions_;
 
   /// Time spent evaluating other_join_conjuncts for NAAJ.
   RuntimeProfile::Counter* null_aware_eval_timer_;
@@ -425,12 +436,12 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
     Partition(RuntimeState* state, PartitionedHashJoinNode* parent, int level);
     ~Partition();
 
-    BufferedTupleStream* build_rows() { return build_rows_; }
-    BufferedTupleStream* probe_rows() { return probe_rows_; }
-    HashTable* hash_tbl() const { return hash_tbl_.get(); }
+    BufferedTupleStream* ALWAYS_INLINE build_rows() { return build_rows_; }
+    BufferedTupleStream* ALWAYS_INLINE probe_rows() { return probe_rows_; }
+    HashTable* ALWAYS_INLINE hash_tbl() const { return hash_tbl_.get(); }
 
-    bool is_closed() const { return is_closed_; }
-    bool is_spilled() const { return is_spilled_; }
+    bool ALWAYS_INLINE is_closed() const { return is_closed_; }
+    bool ALWAYS_INLINE is_spilled() const { return is_spilled_; }
 
     /// Must be called once per partition to release any resources. This should be called
     /// as soon as possible to release memory.
@@ -442,20 +453,17 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
     /// partition. This includes the entire build side and the hash table.
     int64_t EstimatedInMemSize() const;
 
-    /// Returns the actual size of the in memory build side. Only valid to call on
-    /// partitions after BuildPartition()
-    int64_t InMemSize() const;
-
     /// Pins the build tuples for this partition and constructs the hash_tbl_ from it.
     /// Build rows cannot be added after calling this.
     /// If the partition could not be built due to memory pressure, *built is set to false
     /// and the caller is responsible for spilling this partition.
-    /// If 'AddProbeFilters' is set, it creates the probe filters.
-    template<bool const AddProbeFilters>
+    /// If 'BUILD_RUNTIME_FILTERS' is set, populates runtime filters.
+    template<bool const BUILD_RUNTIME_FILTERS>
     Status BuildHashTableInternal(RuntimeState* state, bool* built);
 
-    /// Wrapper for the template-based BuildHashTable() based on 'add_probe_filters'.
-    Status BuildHashTable(RuntimeState* state, bool* built, const bool add_probe_filters);
+    /// Wrapper for the template-based BuildHashTable() based on 'add_runtime_filters'.
+    Status BuildHashTable(RuntimeState* state, bool* built,
+        const bool add_runtime_filters);
 
     /// Spills this partition, cleaning up and unpinning blocks.
     /// If 'unpin_all_build' is true, the build stream is completely unpinned, otherwise,
@@ -509,10 +517,6 @@ class PartitionedHashJoinNode : public BlockingJoinNode {
   /// for subsequent levels.
   ProcessProbeBatchFn process_probe_batch_fn_;
   ProcessProbeBatchFn process_probe_batch_fn_level0_;
-
-  /// Used for concentrating the existence bits from all the partitions, used by the
-  /// probe-side filter optimization. The bitmaps are owned by this node.
-  std::vector<std::pair<SlotId, Bitmap*> > probe_filters_;
 };
 
 }

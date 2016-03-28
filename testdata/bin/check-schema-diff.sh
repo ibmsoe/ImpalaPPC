@@ -20,7 +20,7 @@
 #  - 1 implies that the schemas have changed.
 
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
 . ${IMPALA_HOME}/bin/impala-config.sh > /dev/null 2>&1
 
@@ -34,3 +34,4 @@ if ! git show $GIT_HASH &>/dev/null; then
 fi
 # Check whether a non-empty diff exists.
 git diff --exit-code ${GIT_HASH}..HEAD ${IMPALA_HOME}/testdata/datasets/$DATASET
+git diff --exit-code ${GIT_HASH}..HEAD ${IMPALA_HOME}/testdata/avro_schema_resolution

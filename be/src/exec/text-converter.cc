@@ -36,12 +36,6 @@ TextConverter::TextConverter(char escape_char, const string& null_col_val,
     check_null_(check_null) {
 }
 
-void TextConverter::UnescapeString(StringValue* value, MemPool* pool) {
-  char* new_data = reinterpret_cast<char*>(pool->Allocate(value->len));
-  UnescapeString(value->ptr, new_data, &value->len);
-  value->ptr = new_data;
-}
-
 void TextConverter::UnescapeString(const char* src, char* dest, int* len,
     int64_t maxlen) {
   const char* src_end = src + *len;
@@ -109,17 +103,17 @@ Function* TextConverter::CodegenWriteSlot(LlvmCodeGen* codegen,
   bool is_default_null = (len == 2 && null_col_val[0] == '\\' && null_col_val[1] == 'N');
   Function* is_null_string_fn;
   if (is_default_null) {
-    is_null_string_fn = codegen->GetFunction(IRFunction::IS_NULL_STRING);
+    is_null_string_fn = codegen->GetFunction(IRFunction::IS_NULL_STRING, false);
   } else {
-    is_null_string_fn = codegen->GetFunction(IRFunction::GENERIC_IS_NULL_STRING);
+    is_null_string_fn = codegen->GetFunction(IRFunction::GENERIC_IS_NULL_STRING, false);
   }
   if (is_null_string_fn == NULL) return NULL;
 
-  StructType* tuple_type = tuple_desc->GenerateLlvmStruct(codegen);
+  StructType* tuple_type = tuple_desc->GetLlvmStruct(codegen);
   if (tuple_type == NULL) return NULL;
   PointerType* tuple_ptr_type = PointerType::get(tuple_type, 0);
 
-  Function* set_null_fn = slot_desc->CodegenUpdateNull(codegen, tuple_type, true);
+  Function* set_null_fn = slot_desc->GetUpdateNullFn(codegen, true);
   if (set_null_fn == NULL) {
     LOG(ERROR) << "Could not codegen WriteSlot because slot update codegen failed.";
     return NULL;
@@ -223,7 +217,7 @@ Function* TextConverter::CodegenWriteSlot(LlvmCodeGen* codegen,
         DCHECK(false);
         return NULL;
     }
-    parse_fn = codegen->GetFunction(parse_fn_enum);
+    parse_fn = codegen->GetFunction(parse_fn_enum, false);
     DCHECK(parse_fn != NULL);
 
     // Set up trying to parse the string to the slot type

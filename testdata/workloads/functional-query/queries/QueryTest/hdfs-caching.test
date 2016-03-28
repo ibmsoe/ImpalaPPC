@@ -18,6 +18,18 @@ select * from cached_tbl_nopart
 INT
 ====
 ---- QUERY
+# Create a table 'like' cached_tbl_nopart
+create table like_cached_tbl_nopart like cached_tbl_nopart
+====
+---- QUERY
+# like_cached_tbl_nopart shouldn't inhert the caching settings
+show table stats like_cached_tbl_nopart
+---- RESULTS
+-1,0,'0B','NOT CACHED','NOT CACHED','TEXT','false',regex:.*
+---- TYPES
+BIGINT, BIGINT, STRING, STRING, STRING, STRING, STRING, STRING
+====
+---- QUERY
 # Unpartitioned table shows correct caching
 show table stats cached_tbl_nopart
 ---- RESULTS
@@ -317,7 +329,7 @@ show partitions cached_tbl_part
 '4',-1,1,'2B',regex:.+B,'8','TEXT','false',regex:.*
 '5',-1,0,'0B',regex:.+B,'3','TEXT','false',regex:.*
 '6',-1,0,'0B',regex:.+B,'8','TEXT','false',regex:.*
-'7',-1,0,'0B',regex:.+B,'NOT CACHED','TEXT','false',regex:.*
+'7',-1,0,'0B','NOT CACHED','NOT CACHED','TEXT','false',regex:.*
 'Total',-1,2,'4B',regex:.+B,'','','',''
 ---- TYPES
 STRING, BIGINT, BIGINT, STRING, STRING, STRING, STRING, STRING, STRING
@@ -367,7 +379,7 @@ Table cachedb.cached_tbl_local cannot be cached. Please check if the table or pa
 ---- QUERY
 show partitions cached_tbl_local;
 ---- RESULTS
-'0',-1,0,'0B',regex:.+B,'NOT CACHED','TEXT','false',regex:.*
+'0',-1,0,'0B','NOT CACHED','NOT CACHED','TEXT','false',regex:.*
 '1',-1,0,'0B',regex:.+B,'1','TEXT','false',regex:.*
 'Total',-1,0,'0B',regex:.+B,'','','',''
 ---- TYPES

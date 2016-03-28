@@ -536,13 +536,6 @@ where c_custkey = 67974;
 bigint,bigint
 ====
 ---- QUERY
-# Set the num_nodes query option back to its default value.
-set num_nodes=0
----- RESULTS
----- TYPES
-string,string
-====
----- QUERY
 # IMPALA-2289: Test nested-loop join with right anti join mode inside a subplan.
 select count(*) from customer c left anti join c.c_orders
 where c_custkey between 8000 and 10000
@@ -559,4 +552,27 @@ where c_custkey between 8000 and 10000
 667
 ---- TYPES
 bigint
+====
+---- QUERY
+# IMPALA-2539: Test empty union operands containing relative table refs.
+select c_custkey, o_orderkey
+from customer c,
+ (select o_orderkey from c.c_orders o1
+  union distinct
+  select o_orderkey from c.c_orders o2
+  where false
+  union all
+  select o_orderkey from c.c_orders o3
+  where false
+ ) v1
+where c_custkey = 1
+---- RESULTS
+1,454791
+1,579908
+1,3868359
+1,4273923
+1,4808192
+1,5133509
+---- TYPES
+BIGINT,BIGINT
 ====

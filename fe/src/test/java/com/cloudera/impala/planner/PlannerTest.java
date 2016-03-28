@@ -17,6 +17,7 @@ package com.cloudera.impala.planner;
 import org.junit.Test;
 
 import com.cloudera.impala.thrift.TQueryOptions;
+import com.cloudera.impala.thrift.TRuntimeFilterMode;
 
 // All planner tests, except for S3 specific tests should go here.
 public class PlannerTest extends PlannerTestBase {
@@ -152,6 +153,13 @@ public class PlannerTest extends PlannerTestBase {
   }
 
   @Test
+  public void testPartitionKeyScans() {
+    TQueryOptions options = new TQueryOptions();
+    options.setOptimize_partition_key_scans(true);
+    runPlannerTestFile("partition-key-scans", options);
+  }
+
+  @Test
   public void testLineage() {
     runPlannerTestFile("lineage");
   }
@@ -191,5 +199,27 @@ public class PlannerTest extends PlannerTestBase {
     TQueryOptions options = new TQueryOptions();
     options.setNum_nodes(1);
     runPlannerTestFile("nested-loop-join", options);
+  }
+
+  @Test
+  public void testMemLimit() {
+    // TODO: Create a new test case section for specifying options
+    TQueryOptions options = new TQueryOptions();
+    options.setMem_limit(500);
+    runPlannerTestFile("mem-limit-broadcast-join", options);
+  }
+
+  @Test
+  public void testDisablePreaggregations() {
+    TQueryOptions options = new TQueryOptions();
+    options.setDisable_streaming_preaggregations(true);
+    runPlannerTestFile("disable-preaggregations", options);
+  }
+
+  @Test
+  public void testRuntimeFilterPropagation() {
+    TQueryOptions options = new TQueryOptions();
+    options.setRuntime_filter_mode(TRuntimeFilterMode.GLOBAL);
+    runPlannerTestFile("runtime-filter-propagation", options);
   }
 }

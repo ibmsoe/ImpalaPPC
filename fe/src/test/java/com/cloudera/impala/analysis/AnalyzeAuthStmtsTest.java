@@ -129,14 +129,22 @@ public class AnalyzeAuthStmtsTest extends AnalyzerTest {
           formatArgs));
       AnalyzesOk(String.format("%s ALL ON DATABASE functional %s myrole", formatArgs));
       AnalyzesOk(String.format("%s ALL ON SERVER %s myrole", formatArgs));
+      AnalyzesOk(String.format("%s ALL ON SERVER server1 %s myrole", formatArgs));
       AnalyzesOk(String.format("%s ALL ON URI 'hdfs:////abc//123' %s myrole",
           formatArgs));
       AnalysisError(String.format("%s ALL ON URI 'xxxx:////abc//123' %s myrole",
           formatArgs), "No FileSystem for scheme: xxxx");
+      AnalysisError(String.format("%s ALL ON DATABASE does_not_exist %s myrole",
+          formatArgs), "Error setting privileges for database 'does_not_exist'. " +
+          "Verify that the database exists and that you have permissions to issue " +
+          "a GRANT/REVOKE statement.");
       AnalysisError(String.format("%s ALL ON TABLE does_not_exist %s myrole",
           formatArgs), "Error setting privileges for table 'does_not_exist'. " +
           "Verify that the table exists and that you have permissions to issue " +
           "a GRANT/REVOKE statement.");
+      AnalysisError(String.format("%s ALL ON SERVER does_not_exist %s myrole",
+          formatArgs), "Specified server name 'does_not_exist' does not match the " +
+          "configured server name 'server1'");
 
       // INSERT privilege
       AnalyzesOk(String.format("%s INSERT ON TABLE alltypesagg %s myrole", formatArgs),

@@ -49,7 +49,8 @@ class SkipIf:
       reason="--skip_hbase argument specified")
   not_default_fs = pytest.mark.skipif(not IS_DEFAULT_FS,
       reason="Default filesystem needed")
-
+  kudu_not_supported = pytest.mark.skipif(os.environ["KUDU_IS_SUPPORTED"] == "false",
+      reason="Kudu is not supported")
 
 class SkipIfIsilon:
   caching = pytest.mark.skipif(IS_ISILON, reason="SET CACHED not implemented for Isilon")
@@ -75,6 +76,8 @@ using_old_aggs_joins = re.search(old_agg_regex, test_start_cluster_args) is not 
 class SkipIfOldAggsJoins:
   nested_types = pytest.mark.skipif(using_old_aggs_joins,
       reason="Nested types not supported with old aggs and joins")
+  passthrough_preagg = pytest.mark.skipif(using_old_aggs_joins,
+      reason="Passthrough optimization not implemented by old agg")
   unsupported = pytest.mark.skipif(using_old_aggs_joins,
       reason="Query unsupported with old aggs and joins")
 
@@ -104,3 +107,22 @@ class SkipIfLocal:
       reason="Tests rely on HDFS qualified paths")
   root_path = pytest.mark.skipif(IS_LOCAL,
       reason="Tests rely on the root directory")
+
+# Try to derive the build type. Assume it's 'latest' by default.
+impala_home = os.environ.get("IMPALA_HOME", "")
+build_type_regex = re.compile(r'--build_type=(\w+)', re.I)
+build_type_search_result = re.search(build_type_regex, test_start_cluster_args)
+
+if build_type_search_result is not None:
+  build_type = build_type_search_result.groups()[0].lower()
+else:
+  build_type = 'latest'
+
+# Resolve any symlinks in the path.
+impalad_basedir = \
+    os.path.realpath(os.path.join(impala_home, 'be/build', build_type)).rstrip('/')
+debug_build = os.path.basename(impalad_basedir).lower() == 'debug'
+
+class SkipIfNotDebugBuild:
+  debug_only = pytest.mark.skipif(not debug_build,
+      reason="Tests depends on debug build startup option.")

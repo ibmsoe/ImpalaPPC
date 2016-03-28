@@ -80,21 +80,23 @@ class TestLowMemoryLimits(ImpalaTestSuite):
   '''Super class for the memory limit tests with the TPC-H and TPC-DS queries'''
   EXPECTED_ERROR_MSG = "Memory limit exceeded"
 
-  def low_memory_limit_test(self, vector, tpch_query, limit):
+  def low_memory_limit_test(self, vector, tpch_query, limit, xfail_mem_limit=None):
     mem = vector.get_value('mem_limit')
     # Mem consumption can be +-30MBs, depending on how many scanner threads are
     # running. Adding this extra mem in order to reduce false negatives in the tests.
     limit = limit + 30
 
     # If memory limit larger than the minimum threshold, then it is not expected to fail.
-    expects_error = mem < limit;
+    expects_error = mem < limit
     new_vector = copy(vector)
     new_vector.get_value('exec_option')['mem_limit'] = str(mem) + "m"
     try:
       self.run_test_case(tpch_query, new_vector)
     except ImpalaBeeswaxException as e:
-      if not expects_error: raise
+      if not expects_error and not xfail_mem_limit: raise
       assert TestLowMemoryLimits.EXPECTED_ERROR_MSG in str(e)
+      if not expects_error and xfail_mem_limit:
+        pytest.xfail(xfail_mem_limit)
 
 
 class TestTpchMemLimitError(TestLowMemoryLimits):
@@ -106,7 +108,7 @@ class TestTpchMemLimitError(TestLowMemoryLimits):
   # to run without problem. Those values were determined by manual testing.
   MIN_MEM_FOR_TPCH = { 'Q1' : 140, 'Q2' : 120, 'Q3' : 240, 'Q4' : 125, 'Q5' : 235,\
                        'Q6' : 25, 'Q7' : 265, 'Q8' : 250, 'Q9' : 400, 'Q10' : 240,\
-                       'Q11' : 110, 'Q12' : 125, 'Q13' : 110, 'Q14' : 105, 'Q15' : 125,\
+                       'Q11' : 110, 'Q12' : 125, 'Q13' : 110, 'Q14' : 229, 'Q15' : 125,\
                        'Q16' : 125, 'Q17' : 130, 'Q18' : 425, 'Q19' : 240, 'Q20' : 250,\
                        'Q21' : 620, 'Q22' : 125}
 
@@ -125,72 +127,72 @@ class TestTpchMemLimitError(TestLowMemoryLimits):
         v.get_value('table_format').file_format in ['parquet'])
 
   def test_low_mem_limit_q1(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q1', self.MIN_MEM_FOR_TPCH['Q1']);
+    self.low_memory_limit_test(vector, 'tpch-q1', self.MIN_MEM_FOR_TPCH['Q1'])
 
   def test_low_mem_limit_q2(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q2', self.MIN_MEM_FOR_TPCH['Q2']);
+    self.low_memory_limit_test(vector, 'tpch-q2', self.MIN_MEM_FOR_TPCH['Q2'])
 
   def test_low_mem_limit_q3(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q3', self.MIN_MEM_FOR_TPCH['Q3']);
+    self.low_memory_limit_test(vector, 'tpch-q3', self.MIN_MEM_FOR_TPCH['Q3'])
 
   def test_low_mem_limit_q4(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q4', self.MIN_MEM_FOR_TPCH['Q4']);
+    self.low_memory_limit_test(vector, 'tpch-q4', self.MIN_MEM_FOR_TPCH['Q4'])
 
   def test_low_mem_limit_q5(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q5', self.MIN_MEM_FOR_TPCH['Q5']);
+    self.low_memory_limit_test(vector, 'tpch-q5', self.MIN_MEM_FOR_TPCH['Q5'])
 
   def test_low_mem_limit_q6(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q6', self.MIN_MEM_FOR_TPCH['Q6']);
+    self.low_memory_limit_test(vector, 'tpch-q6', self.MIN_MEM_FOR_TPCH['Q6'])
 
   def test_low_mem_limit_q7(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q7', self.MIN_MEM_FOR_TPCH['Q7']);
+    self.low_memory_limit_test(vector, 'tpch-q7', self.MIN_MEM_FOR_TPCH['Q7'])
 
   def test_low_mem_limit_q8(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q8', self.MIN_MEM_FOR_TPCH['Q8']);
+    self.low_memory_limit_test(vector, 'tpch-q8', self.MIN_MEM_FOR_TPCH['Q8'])
 
   def test_low_mem_limit_q9(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q9', self.MIN_MEM_FOR_TPCH['Q9']);
+    self.low_memory_limit_test(vector, 'tpch-q9', self.MIN_MEM_FOR_TPCH['Q9'])
 
   @SkipIfLocal.mem_usage_different
   def test_low_mem_limit_q10(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q10', self.MIN_MEM_FOR_TPCH['Q10']);
+    self.low_memory_limit_test(vector, 'tpch-q10', self.MIN_MEM_FOR_TPCH['Q10'])
 
   def test_low_mem_limit_q11(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q11', self.MIN_MEM_FOR_TPCH['Q11']);
+    self.low_memory_limit_test(vector, 'tpch-q11', self.MIN_MEM_FOR_TPCH['Q11'])
 
   def test_low_mem_limit_q12(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q12', self.MIN_MEM_FOR_TPCH['Q12']);
+    self.low_memory_limit_test(vector, 'tpch-q12', self.MIN_MEM_FOR_TPCH['Q12'])
 
   def test_low_mem_limit_q13(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q13', self.MIN_MEM_FOR_TPCH['Q13']);
+    self.low_memory_limit_test(vector, 'tpch-q13', self.MIN_MEM_FOR_TPCH['Q13'])
 
   def test_low_mem_limit_q14(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q14', self.MIN_MEM_FOR_TPCH['Q14']);
+    self.low_memory_limit_test(vector, 'tpch-q14', self.MIN_MEM_FOR_TPCH['Q14'])
 
   def test_low_mem_limit_q15(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q15', self.MIN_MEM_FOR_TPCH['Q15']);
+    self.low_memory_limit_test(vector, 'tpch-q15', self.MIN_MEM_FOR_TPCH['Q15'])
 
   def test_low_mem_limit_q16(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q16', self.MIN_MEM_FOR_TPCH['Q16']);
+    self.low_memory_limit_test(vector, 'tpch-q16', self.MIN_MEM_FOR_TPCH['Q16'])
 
   def test_low_mem_limit_q17(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q17', self.MIN_MEM_FOR_TPCH['Q17']);
+    self.low_memory_limit_test(vector, 'tpch-q17', self.MIN_MEM_FOR_TPCH['Q17'])
 
   def test_low_mem_limit_q18(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q18', self.MIN_MEM_FOR_TPCH['Q18']);
+    self.low_memory_limit_test(vector, 'tpch-q18', self.MIN_MEM_FOR_TPCH['Q18'])
 
   def test_low_mem_limit_q19(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q19', self.MIN_MEM_FOR_TPCH['Q19']);
+    self.low_memory_limit_test(vector, 'tpch-q19', self.MIN_MEM_FOR_TPCH['Q19'])
 
   def test_low_mem_limit_q20(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q20', self.MIN_MEM_FOR_TPCH['Q20']);
+    self.low_memory_limit_test(vector, 'tpch-q20', self.MIN_MEM_FOR_TPCH['Q20'])
 
   @SkipIfLocal.mem_usage_different
   def test_low_mem_limit_q21(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q21', self.MIN_MEM_FOR_TPCH['Q21']);
+    self.low_memory_limit_test(vector, 'tpch-q21', self.MIN_MEM_FOR_TPCH['Q21'])
 
   def test_low_mem_limit_q22(self, vector):
-    self.low_memory_limit_test(vector, 'tpch-q22', self.MIN_MEM_FOR_TPCH['Q22']);
+    self.low_memory_limit_test(vector, 'tpch-q22', self.MIN_MEM_FOR_TPCH['Q22'])
 
 
 class TestTpcdsMemLimitError(TestLowMemoryLimits):
@@ -216,4 +218,4 @@ class TestTpcdsMemLimitError(TestLowMemoryLimits):
         v.get_value('table_format').file_format in ['parquet'])
 
   def test_low_mem_limit_q53(self, vector):
-    self.low_memory_limit_test(vector, 'tpcds-q53', self.MIN_MEM_FOR_TPCDS['q53']);
+    self.low_memory_limit_test(vector, 'tpcds-q53', self.MIN_MEM_FOR_TPCDS['q53'])

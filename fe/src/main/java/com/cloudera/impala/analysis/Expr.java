@@ -59,8 +59,8 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   // supports negation.
   private final static String NEGATE_FN = "negate";
 
-  // to be used where we can't come up with a better estimate
-  protected static double DEFAULT_SELECTIVITY = 0.1;
+  // To be used where we cannot come up with a better estimate (selectivity_ is -1).
+  public static double DEFAULT_SELECTIVITY = 0.1;
 
   // returns true if an Expr is a non-analytic aggregate.
   private final static com.google.common.base.Predicate<Expr> isAggregatePredicate_ =
@@ -129,6 +129,18 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
         }
       };
 
+  public final static com.google.common.base.Predicate<Expr> IS_EQ_BINARY_PREDICATE =
+      new com.google.common.base.Predicate<Expr>() {
+        @Override
+        public boolean apply(Expr arg) { return BinaryPredicate.getEqSlots(arg) != null; }
+      };
+
+  public final static com.google.common.base.Predicate<Expr> IS_BINARY_PREDICATE =
+      new com.google.common.base.Predicate<Expr>() {
+        @Override
+        public boolean apply(Expr arg) { return arg instanceof BinaryPredicate; }
+      };
+
   // id that's unique across the entire query statement and is assigned by
   // Analyzer.registerConjuncts(); only assigned for the top-level terms of a
   // conjunction, and therefore null for most Exprs
@@ -147,9 +159,8 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   // Needed for properly capturing expr precedences in the SQL string.
   protected boolean printSqlInParens_ = false;
 
-  // estimated probability of a predicate evaluating to true;
-  // set during analysis;
-  // between 0 and 1 if valid: invalid: -1
+  // Estimated probability of a predicate evaluating to true. Set during analysis.
+  // Between 0 and 1, or set to -1 if the selectivity could not be estimated.
   protected double selectivity_;
 
   // estimated number of distinct values produced by Expr; invalid: -1
@@ -187,6 +198,7 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
   protected void setId(ExprId id) { id_ = id; }
   public Type getType() { return type_; }
   public double getSelectivity() { return selectivity_; }
+  public boolean hasSelectivity() { return selectivity_ >= 0; }
   public long getNumDistinctValues() { return numDistinctValues_; }
   public void setPrintSqlInParens(boolean b) { printSqlInParens_ = b; }
   public boolean isOnClauseConjunct() { return isOnClauseConjunct_; }
@@ -881,6 +893,13 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     return true;
   }
 
+  public static Expr getFirstBoundChild(Expr expr, List<TupleId> tids) {
+    for (Expr child: expr.getChildren()) {
+      if (child.isBoundByTupleIds(tids)) return child;
+    }
+    return null;
+  }
+
   public void getIds(List<TupleId> tupleIds, List<SlotId> slotIds) {
     Set<TupleId> tupleIdSet = Sets.newHashSet();
     Set<SlotId> slotIdSet = Sets.newHashSet();
@@ -1071,6 +1090,25 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
     } else {
       return null;
     }
+  }
+
+  /**
+   * Returns the descriptor of the scan slot that directly or indirectly produces
+   * the values of 'this' SlotRef. Traverses the source exprs of intermediate slot
+   * descriptors to resolve materialization points (e.g., aggregations).
+   * Returns null if 'e' or any source expr of 'e' is not a SlotRef or cast SlotRef.
+   */
+  public SlotDescriptor findSrcScanSlot() {
+    SlotRef slotRef = unwrapSlotRef(false);
+    if (slotRef == null) return null;
+    SlotDescriptor slotDesc = slotRef.getDesc();
+    if (slotDesc.isScanSlot()) return slotDesc;
+    if (slotDesc.getSourceExprs().size() == 1) {
+      return slotDesc.getSourceExprs().get(0).findSrcScanSlot();
+    }
+    // No known source expr, or there are several source exprs meaning the slot is
+    // has no single source table.
+    return null;
   }
 
   /**

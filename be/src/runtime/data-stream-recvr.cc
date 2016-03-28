@@ -35,10 +35,10 @@ class DataStreamRecvr::SenderQueue {
  public:
   SenderQueue(DataStreamRecvr* parent_recvr, int num_senders, RuntimeProfile* profile);
 
-  // Return the next batch form this sender queue. Sets the returned batch in cur_batch_.
+  // Return the next batch from this sender queue. Sets the returned batch in cur_batch_.
   // A returned batch that is not filled to capacity does *not* indicate
   // end-of-stream.
-  // The call blocks until another batch arrives or all senders close
+  // The call blocks until another batch arrives or all senders close.
   // their channels. The returned batch is owned by the sender queue. The caller
   // must acquire data from the returned batch before the next call to GetBatch().
   Status GetBatch(RowBatch** next_batch);
@@ -134,7 +134,7 @@ Status DataStreamRecvr::SenderQueue::GetBatch(RowBatch** next_batch) {
 
   DCHECK(!batch_queue_.empty());
   RowBatch* result = batch_queue_.front().second;
-  recvr_->num_buffered_bytes_ -= batch_queue_.front().first;
+  recvr_->num_buffered_bytes_.Add(-batch_queue_.front().first);
   VLOG_ROW << "fetched #rows=" << result->num_rows();
   batch_queue_.pop_front();
   data_removal__cv_.notify_one();
@@ -161,7 +161,7 @@ void DataStreamRecvr::SenderQueue::AddBatch(const TRowBatch& thrift_batch) {
   while (!batch_queue_.empty() && recvr_->ExceedsLimit(batch_size) && !is_cancelled_) {
     CANCEL_SAFE_SCOPED_TIMER(recvr_->buffer_full_total_timer_, &is_cancelled_);
     VLOG_ROW << " wait removal: empty=" << (batch_queue_.empty() ? 1 : 0)
-             << " #buffered=" << recvr_->num_buffered_bytes_
+             << " #buffered=" << recvr_->num_buffered_bytes_.Load()
              << " batch_size=" << batch_size << "\n";
 
     // We only want one thread running the timer at any one time. Only
@@ -209,7 +209,7 @@ void DataStreamRecvr::SenderQueue::AddBatch(const TRowBatch& thrift_batch) {
     VLOG_ROW << "added #rows=" << batch->num_rows()
              << " batch_size=" << batch_size << "\n";
     batch_queue_.push_back(make_pair(batch_size, batch));
-    recvr_->num_buffered_bytes_ += batch_size;
+    recvr_->num_buffered_bytes_.Add(batch_size);
     data_arrival_cv_.notify_one();
   }
 }
@@ -243,12 +243,15 @@ void DataStreamRecvr::SenderQueue::Cancel() {
 }
 
 void DataStreamRecvr::SenderQueue::Close() {
+  lock_guard<mutex> l(lock_);
+  // Note that the queue must be cancelled first before it can be closed or we may
+  // risk running into a race which can leak row batches. Please see IMPALA-3034.
+  DCHECK(is_cancelled_);
   // Delete any batches queued in batch_queue_
   for (RowBatchQueue::iterator it = batch_queue_.begin();
       it != batch_queue_.end(); ++it) {
     delete it->second;
   }
-
   current_batch_.reset();
 }
 
@@ -335,20 +338,20 @@ void DataStreamRecvr::CancelStream() {
 }
 
 void DataStreamRecvr::Close() {
-  for (int i = 0; i < sender_queues_.size(); ++i) {
-    sender_queues_[i]->Close();
-  }
   // Remove this receiver from the DataStreamMgr that created it.
   // TODO: log error msg
   mgr_->DeregisterRecvr(fragment_instance_id(), dest_node_id());
   mgr_ = NULL;
+  for (int i = 0; i < sender_queues_.size(); ++i) {
+    sender_queues_[i]->Close();
+  }
   merger_.reset();
+  mem_tracker_->UnregisterFromParent();
+  mem_tracker_.reset();
 }
 
 DataStreamRecvr::~DataStreamRecvr() {
   DCHECK(mgr_ == NULL) << "Must call Close()";
-  mem_tracker_->UnregisterFromParent();
-  mem_tracker_.reset();
 }
 
 Status DataStreamRecvr::GetBatch(RowBatch** next_batch) {

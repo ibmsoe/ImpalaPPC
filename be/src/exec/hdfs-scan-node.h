@@ -27,12 +27,14 @@
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/thread.hpp>
 
+#include "exec/filter-context.h"
 #include "exec/scan-node.h"
 #include "exec/scanner-context.h"
 #include "runtime/descriptors.h"
 #include "runtime/disk-io-mgr.h"
 #include "runtime/string-buffer.h"
 #include "util/avro-util.h"
+#include "util/counting-barrier.h"
 #include "util/progress-updater.h"
 #include "util/spinlock.h"
 #include "util/thread.h"
@@ -44,6 +46,7 @@ namespace impala {
 class DescriptorTbl;
 class HdfsScanner;
 class RowBatch;
+class RuntimeFilter;
 class Status;
 class Tuple;
 class TPlanNode;
@@ -106,6 +109,20 @@ struct ScanRangeMetadata {
 /// 4. The scanner processes the buffers, issuing more scan ranges if necessary.
 /// 5. The scanner finishes the scan range and informs the scan node so it can track
 ///    end of stream.
+///
+/// An HdfsScanNode may expect to receive runtime filters produced elsewhere in the plan
+/// (even from remote fragments). These filters arrive asynchronously during execution,
+/// and are applied as soon as they arrive. Filters may be applied by the scan node in the
+/// following scopes:
+///
+/// 1. Per-file (all file formats, partition column filters only) - filtering at this
+/// scope saves IO as the filters are applied before scan ranges are issued.
+/// 2. Per-scan-range (all file formats, partition column filters only) - filtering at
+/// this scope saves CPU as filtered scan ranges are never scanned.
+///
+/// Scanners may also use the same filters to eliminate rows at finer granularities
+/// (e.g. per row).
+///
 /// TODO: this class allocates a bunch of small utility objects that should be
 /// recycled.
 class HdfsScanNode : public ScanNode {
@@ -115,7 +132,7 @@ class HdfsScanNode : public ScanNode {
   ~HdfsScanNode();
 
   /// ExecNode methods
-  virtual Status Init(const TPlanNode& tnode);
+  virtual Status Init(const TPlanNode& tnode, RuntimeState* state);
   virtual Status Prepare(RuntimeState* state);
   virtual Status Open(RuntimeState* state);
   virtual Status GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos);
@@ -131,10 +148,10 @@ class HdfsScanNode : public ScanNode {
   /// Currently this is always 0.
   int tuple_idx() const { return 0; }
 
-  /// Returns number of partition keys in the table, including non-materialized slots
+  /// Returns number of partition keys in the table.
   int num_partition_keys() const { return hdfs_table_->num_clustering_cols(); }
 
-  /// Returns number of materialized partition key slots
+  /// Returns number of partition key slots.
   int num_materialized_partition_keys() const { return partition_key_slots_.size(); }
 
   const TupleDescriptor* tuple_desc() { return tuple_desc_; }
@@ -164,8 +181,8 @@ class HdfsScanNode : public ScanNode {
     return result->second;
   }
 
-  /// The result array is of length num_cols(). The i-th element is true iff column i
-  /// should be materialized.
+  /// The result array is of length hdfs_table_->num_cols(). The i-th element is true iff
+  /// column i should be materialized.
   const bool* is_materialized_col() {
     return reinterpret_cast<const bool*>(&is_materialized_col_[0]);
   }
@@ -175,11 +192,11 @@ class HdfsScanNode : public ScanNode {
   void* GetCodegenFn(THdfsFileFormat::type);
 
   inline void IncNumScannersCodegenEnabled() {
-    ++num_scanners_codegen_enabled_;
+    num_scanners_codegen_enabled_.Add(1);
   }
 
   inline void IncNumScannersCodegenDisabled() {
-    ++num_scanners_codegen_disabled_;
+    num_scanners_codegen_disabled_.Add(1);
   }
 
   /// Adds a materialized row batch for the scan node.  This is called from scanner
@@ -215,16 +232,16 @@ class HdfsScanNode : public ScanNode {
     return AddDiskIoRanges(file_desc->splits, 1);
   }
 
-  /// Allocates and initialises template_tuple_ with any values from
-  /// the partition columns for the current scan range
-  /// Returns NULL if there are no materialized partition keys.
+  /// Allocates and initialises template_tuple_ with any values from the partition columns
+  /// for the current scan range
+  /// Returns NULL if there are no partition keys slots.
   /// TODO: cache the tuple template in the partition object.
   Tuple* InitTemplateTuple(RuntimeState* state,
                            const std::vector<ExprContext*>& value_ctxs);
 
   /// Allocates and return an empty template tuple (i.e. with no values filled in).
   /// Scanners can use this method to initialize a template tuple even if there are no
-  /// materialized partition keys (e.g. to hold Avro default values).
+  /// partition keys slots (e.g. to hold Avro default values).
   Tuple* InitEmptyTemplateTuple(const TupleDescriptor& tuple_desc);
 
   /// Acquires all allocations from pool into scan_node_pool_. Thread-safe.
@@ -253,7 +270,7 @@ class HdfsScanNode : public ScanNode {
   void RangeComplete(const THdfsFileFormat::type& file_type,
       const std::vector<THdfsCompression::type>& compression_type);
 
-  /// Utility function to compute the order in which to materialize slots to allow  for
+  /// Utility function to compute the order in which to materialize slots to allow for
   /// computing conjuncts as slots get materialized (on partial tuples).
   /// 'order' will contain for each slot, the first conjunct it is associated with.
   /// e.g. order[2] = 1 indicates materialized_slots[2] must be materialized before
@@ -282,6 +299,17 @@ class HdfsScanNode : public ScanNode {
   /// Description string for the per volume stats output.
   static const std::string HDFS_SPLIT_STATS_DESC;
 
+  /// Returns true if partition 'partition_id' passes all the filter predicates in
+  /// 'filter_ctxs' and should not be filtered out. 'stats_name' is the key of one of the
+  /// counter groups in FilterStats, and is used to update the correct statistics.
+  ///
+  /// 'filter_ctxs' is either an empty list, in which case filtering is disabled and the
+  /// function returns true, or a set of filter contexts to evaluate.
+  bool PartitionPassesFilterPredicates(int32_t partition_id,
+      const std::string& stats_name, const std::vector<FilterContext>& filter_ctxs);
+
+  const std::vector<FilterContext> filter_ctxs() const { return filter_ctxs_; }
+
  private:
   friend class ScannerContext;
 
@@ -295,6 +323,11 @@ class HdfsScanNode : public ScanNode {
 
   /// Descriptor for tuples this scan node constructs
   const TupleDescriptor* tuple_desc_;
+
+  /// Map from partition ID to a template tuple (owned by scan_node_pool_) which has only
+  /// the partition columns for that partition materialized. Used to filter files and scan
+  /// ranges on partition-column filters. Populated in Prepare().
+  boost::unordered_map<int64_t, Tuple*> partition_template_tuple_map_;
 
   /// Descriptor for the hdfs table, including partition and format metadata.
   /// Set in Prepare, owned by RuntimeState
@@ -327,13 +360,16 @@ class HdfsScanNode : public ScanNode {
   /// this variable.
   bool initial_ranges_issued_;
 
+  /// Released when initial ranges are issued in the first call to GetNext().
+  CountingBarrier ranges_issued_barrier_;
+
   /// The estimated memory required to start up a new scanner thread. If the memory
   /// left (due to limits) is less than this value, we won't start up optional
   /// scanner threads.
   int64_t scanner_thread_bytes_required_;
 
   /// Number of files that have not been issued from the scanners.
-  AtomicInt<int> num_unqueued_files_;
+  AtomicInt32 num_unqueued_files_;
 
   /// Map of HdfsScanner objects to file types.  Only one scanner object will be
   /// created for each file type.  Objects stored in runtime_state's pool.
@@ -348,20 +384,23 @@ class HdfsScanNode : public ScanNode {
   typedef boost::unordered_map<std::vector<int>, int> PathToSlotIdxMap;
   PathToSlotIdxMap path_to_materialized_slot_idx_;
 
+  /// List of contexts for expected runtime filters for this scan node. These contexts are
+  /// cloned by individual scanners to be used in multi-threaded contexts, passed through
+  /// the per-scanner ScannerContext..
+  std::vector<FilterContext> filter_ctxs_;
+
   /// is_materialized_col_[i] = <true i-th column should be materialized, false otherwise>
-  /// for 0 <= i < total # columns
+  /// for 0 <= i < total # columns in table
   //
   /// This should be a vector<bool>, but bool vectors are special-cased and not stored
   /// internally as arrays, so instead we store as chars and cast to bools as needed
   std::vector<char> is_materialized_col_;
 
-  /// Vector containing slot descriptors for all materialized non-partition key
-  /// slots.  These descriptors are sorted in order of increasing col_pos
-  /// TODO: Put this (with associated fields and logic) on ScanNode or ExecNode
+  /// Vector containing slot descriptors for all non-partition key slots.  These
+  /// descriptors are sorted in order of increasing col_pos.
   std::vector<SlotDescriptor*> materialized_slots_;
 
-  /// Vector containing slot descriptors for all materialized partition key slots
-  /// These descriptors are sorted in order of increasing col_pos
+  /// Vector containing slot descriptors for all partition key slots.
   std::vector<SlotDescriptor*> partition_key_slots_;
 
   /// Keeps track of total splits and the number finished.
@@ -385,16 +424,12 @@ class HdfsScanNode : public ScanNode {
   /// This is the number of io buffers that are owned by the scan node and the scanners.
   /// This is used just to help debug leaked io buffers to determine if the leak is
   /// happening in the scanners vs other parts of the execution.
-  AtomicInt<int> num_owned_io_buffers_;
-
-  /// The number of times a token was offered but no scanner threads started.
-  /// This is used for diagnostics only.
-  AtomicInt<int> num_skipped_tokens_;
+  AtomicInt32 num_owned_io_buffers_;
 
   /// Counters which track the number of scanners that have codegen enabled for the
   /// materialize and conjuncts evaluation code paths.
-  AtomicInt<int> num_scanners_codegen_enabled_;
-  AtomicInt<int> num_scanners_codegen_disabled_;
+  AtomicInt32 num_scanners_codegen_enabled_;
+  AtomicInt32 num_scanners_codegen_disabled_;
 
   /// The size of the largest compressed text file to be scanned. This is used to
   /// estimate scanner thread memory usage.
@@ -454,8 +489,14 @@ class HdfsScanNode : public ScanNode {
   /// profile.
   bool counters_running_;
 
-  /// The id of the callback added to the query resource manager when RM is enabled. Used
-  /// to remove the callback before this scan node is destroyed.
+  /// The id of the callback added to the thread resource manager when thread token
+  /// is available. Used to remove the callback before this scan node is destroyed.
+  /// -1 if no callback is registered.
+  int thread_avail_cb_id_;
+
+  /// The id of the callback added to the query resource manager when RM is enabled.
+  /// Used to remove the callback before this scan node is destroyed.
+  /// -1 if no callback is registered.
   int32_t rm_callback_id_;
 
   /// Called when scanner threads are available for this scan node. This will
@@ -474,8 +515,11 @@ class HdfsScanNode : public ScanNode {
   /// This thread terminates when all scan ranges are complete or an error occurred.
   void ScannerThread();
 
-  /// Process the entire scan range with a new scanner object. Executed in scanner thread.
-  Status ProcessSplit(DiskIoMgr::ScanRange* scan_range);
+  /// Process the entire scan range with a new scanner object. Executed in scanner
+  /// thread. 'filter_ctxs' is a clone of the class-wide filter_ctxs_, used to filter rows
+  /// in this split.
+  Status ProcessSplit(const std::vector<FilterContext>& filter_ctxs,
+      DiskIoMgr::ScanRange* scan_range);
 
   /// Returns true if there is enough memory (against the mem tracker limits) to
   /// have a scanner thread.
@@ -509,6 +553,17 @@ class HdfsScanNode : public ScanNode {
   /// Helper to call InitNullCollectionValues() on all tuples produced by this scan
   /// in 'row_batch'.
   void InitNullCollectionValues(RowBatch* row_batch) const;
+
+  /// Returns false if, according to filters in 'filter_ctxs', 'file' should be filtered
+  /// and therefore not processed. 'file_type' is the the format of 'file', and is used
+  /// for bookkeeping. Returns true if all filters pass or are not present.
+  bool FilePassesFilterPredicates(const std::vector<FilterContext>& filter_ctxs,
+      const THdfsFileFormat::type& file_type, HdfsFileDesc* file);
+
+  /// Waits for up to time_ms for runtime filters to arrive, checking every 20ms. Returns
+  /// true if all filters arrived within the time limit (as measured from the time of
+  /// RuntimeFilterBank::RegisterFilter()), false otherwise.
+  bool WaitForRuntimeFilters(int32_t time_ms);
 };
 
 }

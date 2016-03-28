@@ -16,6 +16,7 @@
 #ifndef SCHEDULING_SIMPLE_SCHEDULER_H
 #define SCHEDULING_SIMPLE_SCHEDULER_H
 
+#include <gtest/gtest_prod.h>  // for FRIEND_TEST
 #include <vector>
 #include <string>
 #include <list>
@@ -67,12 +68,13 @@ class SimpleScheduler : public Scheduler {
   /// a round robin fashion and insert it into backends.
   /// If no match is found for a data location, assign the data location in round-robin
   /// order to any of the backends.
-  /// If the set of available backends is updated between calls, round-robin state is reset.
+  /// If the set of available backends is updated between calls, round-robin state is
+  /// reset.
   virtual Status GetBackends(const std::vector<TNetworkAddress>& data_locations,
       BackendList* backends);
 
-  /// Return a backend such that the impalad at backend.address should be used to read data
-  /// from the given data_loation
+  /// Return a backend such that the impalad at backend.address should be used to read
+  /// data from the given data_loation
   virtual impala::Status GetBackend(const TNetworkAddress& data_location,
       TBackendDescriptor* backend);
 
@@ -94,12 +96,13 @@ class SimpleScheduler : public Scheduler {
   virtual void HandleLostResource(const TUniqueId& client_resource_id);
 
  private:
-  /// Protects access to backend_map_ and backend_ip_map_, which might otherwise be updated
-  /// asynchronously with respect to reads. Also protects the locality
+  /// Protects access to backend_map_ and backend_ip_map_, which might otherwise be
+  /// updated asynchronously with respect to reads. Also protects the locality
   /// counters, which are updated in GetBackends.
   boost::mutex backend_map_lock_;
 
-  /// Map from a datanode's IP address to a list of backend addresses running on that node.
+  /// Map from a datanode's IP address to a list of backend addresses running on that
+  /// node.
   typedef boost::unordered_map<std::string, std::list<TBackendDescriptor> > BackendMap;
   BackendMap backend_map_;
 
@@ -145,7 +148,7 @@ class SimpleScheduler : public Scheduler {
   /// Initialisation metric
   BooleanProperty* initialised_;
   /// Current number of backends
-  IntGauge* num_backends_metric_;
+  IntGauge* num_fragment_instances_metric_;
 
   /// Counts the number of UpdateMembership invocations, to help throttle the logging.
   uint32_t update_count_;
@@ -154,7 +157,7 @@ class SimpleScheduler : public Scheduler {
   boost::mutex active_resources_lock_;
 
   /// Maps from a Llama reservation id to the coordinator of the query using that
-  /// reservation.  The map is used to cancel queries whose reservation has been preempted.
+  /// reservation. The map is used to cancel queries whose reservation has been preempted.
   /// Entries are added in Schedule() calls that result in granted resource allocations.
   /// Entries are removed in Release().
   typedef boost::unordered_map<TUniqueId, Coordinator*> ActiveReservationsMap;
@@ -214,6 +217,7 @@ class SimpleScheduler : public Scheduler {
   /// range locations for a particular scan node.
   /// If exec_at_coord is true, all scan ranges will be assigned to the coord node.
   Status ComputeScanRangeAssignment(PlanNodeId node_id,
+      const TReplicaPreference::type* node_replica_preference, bool node_random_replica,
       const std::vector<TScanRangeLocations>& locations,
       const std::vector<TNetworkAddress>& host_list, bool exec_at_coord,
       const TQueryOptions& query_options, FragmentScanRangeAssignment* assignment);
@@ -253,6 +257,9 @@ class SimpleScheduler : public Scheduler {
   /// to the given exchange in the given fragment index.
   int FindSenderFragment(TPlanNodeId exch_id, int fragment_idx,
       const TQueryExecRequest& exec_request);
+
+  FRIEND_TEST(SimpleAssignmentTest, ComputeAssignmentDeterministicNonCached);
+  FRIEND_TEST(SimpleAssignmentTest, ComputeAssignmentRandomNonCached);
 };
 
 }

@@ -1,3 +1,4 @@
+====
 ---- QUERY
 # count(distinct)
 select count(distinct smallint_col, tinyint_col)
@@ -358,13 +359,6 @@ from alltypesagg
 957,1016,963
 ---- TYPES
 bigint, bigint, bigint
-====
----- QUERY
-# Unset the query option from the previous test.
-set appx_count_distinct=false
----- RESULTS
----- TYPES
-string, string
 ====
 ---- QUERY
 # Large (more than 1 regular batches) distinct with multiple group by keys.

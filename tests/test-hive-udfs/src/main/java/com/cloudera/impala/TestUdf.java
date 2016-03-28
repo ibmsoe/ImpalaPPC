@@ -35,8 +35,8 @@ import org.apache.hadoop.io.Text;
  * on it.
  *
  * The jar for this file can be built by running "mvn clean package" in
- * tests/hive-test-udfs. This is run in testdata/bin/create-load-data.sh, and
- * copied to HDFS in bin/copy-udfs-uda.sh.
+ * tests/test-hive-udfs. This is run in testdata/bin/create-load-data.sh, and
+ * copied to HDFS in testdata/bin/copy-udfs-uda.sh.
  */
 public class TestUdf extends UDF {
   public TestUdf() {
@@ -93,5 +93,55 @@ public class TestUdf extends UDF {
   public String evaluate(String a, String b, String c) {
     if (a == null || b == null || c == null) return null;
     return a + b + c;
+  }
+
+  // Udfs returning primitive types
+  public int evaluate(IntWritable a, IntWritable b) {
+    if (a == null || b == null) return -1;
+    return a.get() + b.get();
+  }
+
+  public float evaluate(FloatWritable a, FloatWritable b) {
+    if (a == null || b == null) return -1;
+    return a.get() + b.get();
+  }
+
+  public double evaluate(DoubleWritable d1,
+      DoubleWritable d2, DoubleWritable d3) {
+    if (d1 == null || d2 == null) return -1;
+    return d1.get() + d2.get() + d3.get();
+  }
+
+  public short evaluate(ShortWritable s1, ShortWritable s2) {
+    if (s1 == null || s2 == null) return -1;
+    return (short)(s1.get() + s2.get());
+  }
+
+  public boolean evaluate(BooleanWritable b1, BooleanWritable b2) {
+    if (b1 == null || b2 == null) return false;
+    return b1.get() && b2.get();
+  }
+
+  // Udfs with primitive argument types
+  public int evaluate(int a, int b, int c) {
+    return a + b + c;
+  }
+
+  public boolean evaluate(boolean a, boolean b, boolean c) {
+    return a && b && c;
+  }
+
+  public short evaluate(short a, short b, short c) {
+    return (short)(a + b + c);
+  }
+
+  public float evaluate(float a, float b, float c) {
+    return a + b + c;
+  }
+
+  // Udfs with mixed types
+  public double evaluate(IntWritable a, double b) {
+    if (a == null) return -1;
+    return ((double)a.get()) + b;
   }
 }

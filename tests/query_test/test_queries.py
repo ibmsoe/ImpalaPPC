@@ -10,7 +10,6 @@ from tests.common.test_vector import *
 from tests.common.test_dimensions import create_uncompressed_text_dimension
 from tests.common.test_dimensions import create_exec_option_dimension
 from tests.common.skip import SkipIfS3
-from tests.util.test_file_parser import QueryTestSectionReader
 
 class TestQueries(ImpalaTestSuite):
   @classmethod
@@ -36,22 +35,6 @@ class TestQueries(ImpalaTestSuite):
   @classmethod
   def get_workload(cls):
     return 'functional-query'
-
-  def test_exprs(self, vector):
-    # TODO: Enable some of these tests for Avro if possible
-    # Don't attempt to evaluate timestamp expressions with Avro tables (which)
-    # don't support a timestamp type)"
-    table_format = vector.get_value('table_format')
-    if table_format.file_format == 'avro':
-      pytest.skip()
-    if table_format.file_format == 'hbase':
-      pytest.xfail("A lot of queries check for NULLs, which hbase does not recognize")
-    self.run_test_case('QueryTest/exprs', vector)
-
-    # This will change the current database to matching table format and then execute
-    # select current_database(). An error will be thrown if multiple values are returned.
-    current_db = self.execute_scalar('select current_database()', vector=vector)
-    assert current_db == QueryTestSectionReader.get_db_name(table_format)
 
   def test_hdfs_scan_node(self, vector):
     self.run_test_case('QueryTest/hdfs-scan-node', vector)
@@ -83,10 +66,6 @@ class TestQueries(ImpalaTestSuite):
 
   def test_union(self, vector):
     self.run_test_case('QueryTest/union', vector)
-
-  def test_very_large_strings(self, vector):
-    """Regression test for IMPALA-1619"""
-    self.run_test_case('QueryTest/large_strings', vector)
 
   def test_sort(self, vector):
     if vector.get_value('table_format').file_format == 'hbase':
@@ -170,3 +149,22 @@ class TestQueriesTextTables(ImpalaTestSuite):
   @SkipIfS3.insert
   def test_values(self, vector):
     self.run_test_case('QueryTest/values', vector)
+
+# Tests in this class are only run against Parquet because the tests don't exercise the
+# file format.
+class TestQueriesParquetTables(ImpalaTestSuite):
+  @classmethod
+  def add_test_dimensions(cls):
+    super(TestQueriesParquetTables, cls).add_test_dimensions()
+    cls.TestMatrix.add_constraint(lambda v:\
+        v.get_value('table_format').file_format == 'parquet')
+
+  @classmethod
+  def get_workload(cls):
+    return 'functional-query'
+
+  @pytest.mark.execute_serially
+  def test_very_large_strings(self, vector):
+    """Regression test for IMPALA-1619. Doesn't need to be run on all file formats.
+       Executes serially to avoid large random spikes in mem usage."""
+    self.run_test_case('QueryTest/large_strings', vector)

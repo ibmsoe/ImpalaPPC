@@ -56,6 +56,7 @@ struct FragmentExecParams {
   /// N = hosts.size (i.e. N = number of fragment instances)
   int sender_id_base;
 };
+
 /// A QuerySchedule contains all necessary information for a query coordinator to
 /// generate fragment execution requests and start query execution. If resource management
 /// is enabled, then a schedule also contains the resource reservation request
@@ -67,8 +68,8 @@ struct FragmentExecParams {
 class QuerySchedule {
  public:
   QuerySchedule(const TUniqueId& query_id, const TQueryExecRequest& request,
-      const TQueryOptions& query_options, const std::string& effective_user,
-      RuntimeProfile* summary_profile, RuntimeProfile::EventSequence* query_events);
+      const TQueryOptions& query_options, RuntimeProfile* summary_profile,
+      RuntimeProfile::EventSequence* query_events);
 
   /// Returns OK if reservation_ contains a matching resource for each
   /// of the hosts in fragment_exec_params_. Returns an error otherwise.
@@ -77,7 +78,6 @@ class QuerySchedule {
   const TUniqueId& query_id() const { return query_id_; }
   const TQueryExecRequest& request() const { return request_; }
   const TQueryOptions& query_options() const { return query_options_; }
-  const std::string& effective_user() const { return effective_user_; }
   const std::string& request_pool() const { return request_pool_; }
   void set_request_pool(const std::string& pool_name) { request_pool_ = pool_name; }
   bool HasReservation() const { return !reservation_.allocated_resources.empty(); }
@@ -98,15 +98,17 @@ class QuerySchedule {
 
   /// Helper methods used by scheduler to populate this QuerySchedule.
   void AddScanRanges(int64_t delta) { num_scan_ranges_ += delta; }
-  void set_num_backends(int64_t num_backends) { num_backends_ = num_backends; }
-  void set_num_hosts(int64_t num_hosts) {
-    DCHECK_GT(num_hosts, 0);
-    num_hosts_ = num_hosts;
+  void set_num_fragment_instances(int64_t num_fragment_instances) {
+    num_fragment_instances_ = num_fragment_instances;
   }
-  int64_t num_backends() const { return num_backends_; }
-  int64_t num_hosts() const { return num_hosts_; }
+  int64_t num_fragment_instances() const { return num_fragment_instances_; }
   int64_t num_scan_ranges() const { return num_scan_ranges_; }
+
+  /// Map node ids to the index of their fragment in TQueryExecRequest.fragments.
   int32_t GetFragmentIdx(PlanNodeId id) const { return plan_node_to_fragment_idx_[id]; }
+
+  /// Map node ids to the index of the node inside their plan.nodes list.
+  int32_t GetNodeIdx(PlanNodeId id) const { return plan_node_to_plan_node_idx_[id]; }
   std::vector<FragmentExecParams>* exec_params() { return &fragment_exec_params_; }
   const boost::unordered_set<TNetworkAddress>& unique_hosts() const {
     return unique_hosts_;
@@ -132,13 +134,17 @@ class QuerySchedule {
   /// are all owned by the enclosing QueryExecState.
   const TUniqueId& query_id_;
   const TQueryExecRequest& request_;
+
+  /// The query options from the TClientRequest
   const TQueryOptions& query_options_;
-  const std::string effective_user_;
   RuntimeProfile* summary_profile_;
   RuntimeProfile::EventSequence* query_events_;
 
   /// Maps from plan node id to its fragment index. Filled in c'tor.
   std::vector<int32_t> plan_node_to_fragment_idx_;
+
+  /// Maps from plan node id to its index in plan.nodes. Filled in c'tor.
+  std::vector<int32_t> plan_node_to_plan_node_idx_;
 
   /// vector is indexed by fragment index from TQueryExecRequest.fragments;
   /// populated by Scheduler::Schedule()
@@ -148,11 +154,7 @@ class QuerySchedule {
   boost::unordered_set<TNetworkAddress> unique_hosts_;
 
   /// Number of backends executing plan fragments on behalf of this query.
-  int64_t num_backends_;
-
-  /// Total number of hosts. Used to compute the total cluster estimated memory
-  /// in GetClusterMemoryEstimate().
-  int64_t num_hosts_;
+  int64_t num_fragment_instances_;
 
   /// Total number of scan ranges of this query.
   int64_t num_scan_ranges_;

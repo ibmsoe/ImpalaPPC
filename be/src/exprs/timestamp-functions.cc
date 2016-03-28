@@ -25,6 +25,7 @@
 #include "exprs/anyval-util.h"
 
 #include "runtime/tuple-row.h"
+#include "runtime/timestamp-parse-util.h"
 #include "runtime/timestamp-value.h"
 #include "util/path-builder.h"
 #include "runtime/string-value.inline.h"
@@ -135,7 +136,7 @@ void TimestampFunctions::UnixAndFromUnixClose(FunctionContext* context,
 }
 
 StringVal TimestampFunctions::StringValFromTimestamp(FunctionContext* context,
-    TimestampValue tv, const StringVal& fmt) {
+    const TimestampValue& tv, const StringVal& fmt) {
   void* state = context->GetFunctionState(FunctionContext::THREAD_LOCAL);
   DateTimeFormatContext* dt_ctx = reinterpret_cast<DateTimeFormatContext*>(state);
   if (!context->IsArgConstant(1)) {
@@ -178,26 +179,30 @@ BigIntVal TimestampFunctions::Unix(FunctionContext* context, const StringVal& st
   const TimestampVal& tv_val = ToTimestamp(context, string_val, fmt);
   if (tv_val.is_null) return BigIntVal::null();
   const TimestampValue& tv = TimestampValue::FromTimestampVal(tv_val);
-  return BigIntVal(tv.ToUnixTime());
+  time_t result;
+  return (tv.ToUnixTime(&result)) ? BigIntVal(result) : BigIntVal::null();
 }
 
 BigIntVal TimestampFunctions::Unix(FunctionContext* context, const TimestampVal& ts_val) {
   if (ts_val.is_null) return BigIntVal::null();
   const TimestampValue& tv = TimestampValue::FromTimestampVal(ts_val);
-  if (!tv.HasDate()) return BigIntVal::null();
-  return BigIntVal(tv.ToUnixTime());
+  time_t result;
+  return (tv.ToUnixTime(&result)) ? BigIntVal(result) : BigIntVal::null();
 }
 
 BigIntVal TimestampFunctions::Unix(FunctionContext* context) {
-  if (!context->impl()->state()->now()->HasDate()) return BigIntVal::null();
-  return BigIntVal(context->impl()->state()->now()->ToUnixTime());
+  time_t result;
+  if (context->impl()->state()->now()->ToUnixTime(&result)) {
+    return BigIntVal(result);
+  } else {
+    return BigIntVal::null();
+  }
 }
 
 TimestampVal TimestampFunctions::ToTimestamp(FunctionContext* context,
     const BigIntVal& bigint_val) {
   if (bigint_val.is_null) return TimestampVal::null();
   TimestampValue tv(bigint_val.val);
-  if (!tv.HasDate()) return TimestampVal::null();
   TimestampVal tv_val;
   tv.ToTimestampVal(&tv_val);
   return tv_val;
@@ -221,7 +226,6 @@ TimestampVal TimestampFunctions::ToTimestamp(FunctionContext* context,
   }
   TimestampValue tv = TimestampValue(
       reinterpret_cast<const char*>(date.ptr), date.len, *dt_ctx);
-  if (!tv.HasDate()) return TimestampVal::null();
   TimestampVal tv_val;
   tv.ToTimestampVal(&tv_val);
   return tv_val;
@@ -239,8 +243,8 @@ BigIntVal TimestampFunctions::UnixFromString(FunctionContext* context,
     const StringVal& sv) {
   if (sv.is_null) return BigIntVal::null();
   TimestampValue tv(reinterpret_cast<const char *>(sv.ptr), sv.len);
-  if (!tv.HasDate()) return BigIntVal::null();
-  return BigIntVal(tv.ToUnixTime());
+  time_t result;
+  return (tv.ToUnixTime(&result)) ? BigIntVal(result) : BigIntVal::null();
 }
 
 void TimestampFunctions::ReportBadFormat(FunctionContext* context,
@@ -344,9 +348,17 @@ IntVal TimestampFunctions::Second(FunctionContext* context, const TimestampVal& 
   return IntVal(ts_value.time().seconds());
 }
 
+IntVal TimestampFunctions::Millisecond(FunctionContext* context,
+    const TimestampVal& ts_val) {
+  if (ts_val.is_null) return IntVal::null();
+  const TimestampValue& ts_value = TimestampValue::FromTimestampVal(ts_val);
+  if (!ts_value.HasTime()) return IntVal::null();
+  const boost::posix_time::time_duration& time = ts_value.time();
+  return IntVal(time.total_milliseconds() - time.total_seconds() * 1000);
+}
+
 TimestampVal TimestampFunctions::Now(FunctionContext* context) {
   const TimestampValue* now = context->impl()->state()->now();
-  if (!now->HasDateOrTime()) return TimestampVal::null();
   TimestampVal return_val;
   now->ToTimestampVal(&return_val);
   return return_val;

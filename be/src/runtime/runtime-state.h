@@ -31,15 +31,16 @@
 #include "runtime/descriptors.h"  // for PlanNodeId
 #include "runtime/disk-io-mgr.h"  // for DiskIoMgr::RequestContext
 #include "runtime/mem-tracker.h"
+#include "runtime/runtime-filter.h"
 #include "runtime/thread-resource-mgr.h"
 #include "gen-cpp/PlanNodes_types.h"
 #include "gen-cpp/Types_types.h"  // for TUniqueId
 #include "gen-cpp/ImpalaInternalService_types.h"  // for TQueryOptions
+#include "util/auth-util.h"
 #include "util/runtime-profile.h"
 
 namespace impala {
 
-class Bitmap;
 class BufferedBlockMgr;
 class DescriptorTbl;
 class ObjectPool;
@@ -109,11 +110,7 @@ class RuntimeState {
   }
   const TExecPlanFragmentParams& fragment_params() const { return fragment_params_; }
   const std::string& effective_user() const {
-    if (query_ctx().session.__isset.delegated_user &&
-        !query_ctx().session.delegated_user.empty()) {
-      return do_as_user();
-    }
-    return connected_user();
+    return GetEffectiveUser(query_ctx().session);
   }
   const std::string& do_as_user() const { return query_ctx().session.delegated_user; }
   const std::string& connected_user() const {
@@ -156,26 +153,7 @@ class RuntimeState {
   /// See comment on root_node_id_. We add one to prevent having a hash seed of 0.
   uint32_t fragment_hash_seed() const { return root_node_id_ + 1; }
 
-  /// Size to use when building bitmap filters. This is a prime number which reduces
-  /// collisions and the resulting bitmap is just under 4Kb.
-  /// Having all bitmaps be the same size allows us to combine (i.e. AND) bitmaps.
-  uint32_t slot_filter_bitmap_size() const { return 32213; }
-
-  /// Adds a bitmap filter on slot 'slot'. If hash(slot) % bitmap.Size() is false, this
-  /// value can be filtered out. Multiple bitmap filters can be added to a single slot.
-  /// If it is the first call to add a bitmap filter for the specific slot, indicated by
-  /// 'acquired_ownership', then the passed bitmap should not be deleted by the caller.
-  /// Thread safe.
-  void AddBitmapFilter(SlotId slot, Bitmap* bitmap, bool* acquired_ownership);
-
-  /// Returns bitmap filter on 'slot'. Returns NULL if there are no bitmap filters on this
-  /// slot.
-  /// It is not safe to concurrently call AddBitmapFilter() and GetBitmapFilter().
-  /// All calls to AddBitmapFilter() should happen before.
-  const Bitmap* GetBitmapFilter(SlotId slot) {
-    if (slot_bitmap_filters_.find(slot) == slot_bitmap_filters_.end()) return NULL;
-    return slot_bitmap_filters_[slot];
-  }
+  RuntimeFilterBank* filter_bank() { return &filter_bank_; }
 
   PartitionStatusMap* per_partition_status() { return &per_partition_status_; }
 
@@ -194,15 +172,26 @@ class RuntimeState {
   /// 'codegen' will be set to NULL if codegen_ has not been initialized.
   Status GetCodegen(LlvmCodeGen** codegen, bool initialize = true);
 
+  /// Returns true if codegen should be used for expr evaluation in this plan fragment.
+  bool ShouldCodegenExpr() { return codegen_expr_; }
+
+  /// Records that this fragment should use codegen for expr evaluation whenever
+  /// applicable if codegen is not disabled.
+  void SetCodegenExpr() { codegen_expr_ = codegen_enabled(); }
+
   BufferedBlockMgr* block_mgr() {
     DCHECK(block_mgr_.get() != NULL);
     return block_mgr_.get();
   }
 
-  Status GetQueryStatus() {
-    boost::lock_guard<SpinLock> l(query_status_lock_);
-    return query_status_;
-  };
+  inline Status GetQueryStatus() {
+    // Do a racy check for query_status_ to avoid unnecessary spinlock acquisition.
+    if (UNLIKELY(!query_status_.ok())) {
+      boost::lock_guard<SpinLock> l(query_status_lock_);
+      return query_status_;
+    }
+    return Status::OK();
+  }
 
   /// Log an error that will be sent back to the coordinator based on an instance of the
   /// ErrorMsg class. The runtime state aggregates log messages based on type with one
@@ -255,6 +244,9 @@ class RuntimeState {
     if (!query_status_.ok()) return;
     query_status_ = Status(err_msg);
   }
+
+  /// Function for logging memory usages to the error log when memory limit is exceeded.
+  void LogMemLimitExceeded(const MemTracker* tracker, int64_t failed_allocation_size);
 
   /// Sets query_status_ to MEM_LIMIT_EXCEEDED and logs all the registered trackers.
   /// Subsequent calls to this will be no-ops. Returns query_status_.
@@ -326,6 +318,9 @@ class RuntimeState {
   ExecEnv* exec_env_;
   boost::scoped_ptr<LlvmCodeGen> codegen_;
 
+  /// True if this fragment should force codegen for expr evaluation.
+  bool codegen_expr_;
+
   /// Thread resource management object for this fragment's execution.  The runtime
   /// state is responsible for returning this pool to the thread mgr.
   ThreadResourceMgr::ResourcePool* resource_pool_;
@@ -382,18 +377,15 @@ class RuntimeState {
   /// This is the node id of the root node for this plan fragment. This is used as the
   /// hash seed and has two useful properties:
   /// 1) It is the same for all exec nodes in a fragment, so the resulting hash values
-  /// can be shared (i.e. for slot_bitmap_filters_).
+  /// can be shared.
   /// 2) It is different between different fragments, so we do not run into hash
   /// collisions after data partitioning (across fragments). See IMPALA-219 for more
   /// details.
   PlanNodeId root_node_id_;
 
-  /// Lock protecting slot_bitmap_filters_
-  SpinLock bitmap_lock_;
-
-  /// Bitmap filter on the hash for 'SlotId'. If bitmap[hash(slot]] is unset, this
-  /// value can be filtered out. These filters are generated during the query execution.
-  boost::unordered_map<SlotId, Bitmap*> slot_bitmap_filters_;
+  /// Manages runtime filters that are either produced or consumed (or both!) by plan
+  /// nodes that share this runtime state.
+  RuntimeFilterBank filter_bank_;
 
   /// prohibit copies
   RuntimeState(const RuntimeState&);

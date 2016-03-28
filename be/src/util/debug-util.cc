@@ -21,7 +21,7 @@
 #include "common/version.h"
 #include "runtime/collection-value.h"
 #include "runtime/descriptors.h"
-#include "runtime/raw-value.h"
+#include "runtime/raw-value.inline.h"
 #include "runtime/tuple-row.h"
 #include "runtime/row-batch.h"
 #include "util/cpu-info.h"
@@ -172,7 +172,6 @@ string PrintTuple(const Tuple* t, const TupleDescriptor& d) {
   bool first_value = true;
   for (int i = 0; i < d.slots().size(); ++i) {
     SlotDescriptor* slot_d = d.slots()[i];
-    if (!slot_d->is_materialized()) continue;
     if (first_value) {
       first_value = false;
     } else {

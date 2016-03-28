@@ -8,6 +8,7 @@
 
 import logging
 import pytest
+import random
 from copy import deepcopy
 from subprocess import call, check_call
 
@@ -15,9 +16,12 @@ from testdata.common import widetable
 from tests.common.test_vector import *
 from tests.common.impala_test_suite import *
 from tests.util.test_file_parser import *
-from tests.util.filesystem_utils import WAREHOUSE
+from tests.util.filesystem_utils import WAREHOUSE, get_fs_path
+from tests.util.get_parquet_metadata import get_parquet_metadata
 from tests.common.test_dimensions import create_single_exec_option_dimension
 from tests.common.skip import SkipIfS3, SkipIfIsilon, SkipIfOldAggsJoins, SkipIfLocal
+
+from parquet.ttypes import ConvertedType
 
 class TestScannersAllTableFormats(ImpalaTestSuite):
   BATCH_SIZES = [0, 1, 16]
@@ -138,10 +142,10 @@ class TestWideRow(ImpalaTestSuite):
     # We need > 10 MB of memory because we're creating extra buffers:
     # - 10 MB table / 5 MB scan range = 2 scan ranges, each of which may allocate ~20MB
     # - Sync reads will allocate ~5MB of space
-    # The 80MB value used here was determined empirically by raising the limit until the
+    # The 100MB value used here was determined empirically by raising the limit until the
     # query succeeded for all file formats -- I don't know exactly why we need this much.
     # TODO: figure out exact breakdown of memory usage (IMPALA-681)
-    new_vector.get_value('exec_option')['mem_limit'] = 80 * 1024 * 1024
+    new_vector.get_value('exec_option')['mem_limit'] = 100 * 1024 * 1024
     self.run_test_case('QueryTest/wide-row', new_vector)
 
 class TestWideTable(ImpalaTestSuite):
@@ -208,10 +212,14 @@ class TestParquet(ImpalaTestSuite):
   @SkipIfS3.hdfs_block_size
   @SkipIfIsilon.hdfs_block_size
   @SkipIfLocal.multiple_impalad
+  @pytest.mark.execute_serially
   def test_multiple_blocks(self, vector):
     # For IMPALA-1881. The table functional_parquet.lineitem_multiblock has 3 blocks, so
     # we verify if each impalad reads one block by checking if each impalad reads at
     # least one row group.
+    # It needs to execute serially because if there is at a time more, than one query
+    # being scheduled, the simple scheduler round robins colocated impalads across
+    # all running queries. See IMPALA-2479 for more details.
     DB_NAME = 'functional_parquet'
     TABLE_NAME = 'lineitem_multiblock'
     query = 'select count(l_orderkey) from %s.%s' % (DB_NAME, TABLE_NAME)
@@ -234,125 +242,62 @@ class TestParquet(ImpalaTestSuite):
     for scan_ranges_complete in scan_ranges_complete_list[1:]:
       assert int(scan_ranges_complete) == 1
 
-# Missing coverage: Impala can query a table with complex types created by Hive on a
-# non-hdfs filesystem.
-@SkipIfS3.hive
-@SkipIfIsilon.hive
-@SkipIfLocal.hive
-class TestParquetComplexTypes(ImpalaTestSuite):
-  COMPLEX_COLUMN_TABLE = "functional_parquet.nested_column_types"
+  @SkipIfS3.insert
+  def test_annotate_utf8_option(self, vector, unique_database):
+    if self.exploration_strategy() != 'exhaustive': pytest.skip("Only run in exhaustive")
 
-  @classmethod
-  def get_workload(cls):
-    return 'functional-query'
+    # Create table
+    TABLE_NAME = "parquet_annotate_utf8_test"
+    qualified_table_name = "%s.%s" % (unique_database, TABLE_NAME)
+    query = 'create table %s (a string, b char(10), c varchar(10), d string) ' \
+            'stored as parquet' % qualified_table_name
+    self.client.execute(query)
 
-  @classmethod
-  def add_test_dimensions(cls):
-    super(TestParquetComplexTypes, cls).add_test_dimensions()
-    cls.TestMatrix.add_dimension(create_single_exec_option_dimension())
-    # Only run on delimited text with no compression.
-    cls.TestMatrix.add_dimension(create_parquet_dimension(cls.get_workload()))
+    # Insert data that should have UTF8 annotation
+    query = 'insert overwrite table %s '\
+            'values("a", cast("b" as char(10)), cast("c" as varchar(10)), "d")' \
+            % qualified_table_name
+    self.execute_query(query, {'parquet_annotate_strings_utf8': True})
 
-  # This tests we can read the scalar-typed columns from a Parquet table that also has
-  # complex-typed columns.
-  # TODO: remove this when we can read complex-typed columns (complex types testing should
-  # supercede this)
-  def test_complex_column_types(self, vector):
-    self._drop_complex_column_table()
+    def get_schema_elements():
+      # Copy the created file to the local filesystem and parse metadata
+      local_file = '/tmp/utf8_test_%s.parq' % random.randint(0, 10000)
+      LOG.info("test_annotate_utf8_option local file name: " + local_file)
+      hdfs_file = get_fs_path('/test-warehouse/%s.db/%s/*.parq'
+          % (unique_database, TABLE_NAME))
+      check_call(['hadoop', 'fs', '-copyToLocal', hdfs_file, local_file])
+      metadata = get_parquet_metadata(local_file)
 
-    # Partitioned case
-    create_table_stmt = """
-      CREATE TABLE IF NOT EXISTS {0} (
-        a int,
-        b ARRAY<STRUCT<c:INT, d:STRING>>,
-        e MAP<STRING,INT>,
-        f string,
-        g ARRAY<INT>,
-        h STRUCT<i:DOUBLE>
-      ) PARTITIONED BY (p1 INT, p2 STRING)
-      STORED AS PARQUET;
-    """.format(self.COMPLEX_COLUMN_TABLE)
+      # Extract SchemaElements corresponding to the table columns
+      a_schema_element = metadata.schema[1]
+      assert a_schema_element.name == 'a'
+      b_schema_element = metadata.schema[2]
+      assert b_schema_element.name == 'b'
+      c_schema_element = metadata.schema[3]
+      assert c_schema_element.name == 'c'
+      d_schema_element = metadata.schema[4]
+      assert d_schema_element.name == 'd'
 
-    insert_stmt = """
-      INSERT OVERWRITE TABLE {0}
-      PARTITION (p1=1, p2="partition1")
-      SELECT 1, array(named_struct("c", 2, "d", "foo")), map("key1", 10, "key2", 20),
-        "bar", array(2,3,4,5), named_struct("i", 1.23)
-      FROM functional_parquet.tinytable limit 2;
-    """.format(self.COMPLEX_COLUMN_TABLE)
+      os.remove(local_file)
+      return a_schema_element, b_schema_element, c_schema_element, d_schema_element
 
-    check_call(["hive", "-e", create_table_stmt])
-    check_call(["hive", "-e", insert_stmt])
+    # Check that the schema uses the UTF8 annotation
+    a_schema_elt, b_schema_elt, c_schema_elt, d_schema_elt = get_schema_elements()
+    assert a_schema_elt.converted_type == ConvertedType.UTF8
+    assert b_schema_elt.converted_type == ConvertedType.UTF8
+    assert c_schema_elt.converted_type == ConvertedType.UTF8
+    assert d_schema_elt.converted_type == ConvertedType.UTF8
 
-    self.execute_query("invalidate metadata %s" % self.COMPLEX_COLUMN_TABLE)
+    # Create table and insert data that should not have UTF8 annotation for strings
+    self.execute_query(query, {'parquet_annotate_strings_utf8': False})
 
-    result = self.execute_query("select count(*) from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 1)
-    assert(result.data[0] == "2")
-
-    result = self.execute_query("select a from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 2)
-    assert(result.data[1] == "1")
-
-    result = self.execute_query(
-      "select p1, a from %s where p1 = 1" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 2)
-    assert(result.data[1] == "1\t1")
-
-    result = self.execute_query("select f from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 2)
-    assert(result.data[1] == "bar")
-
-    result = self.execute_query(
-      "select p2, f from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 2)
-    assert(result.data[1] == "partition1\tbar")
-
-    # Unpartitioned case
-    self._drop_complex_column_table()
-
-    create_table_stmt = """
-      CREATE TABLE IF NOT EXISTS {0} (
-        a int,
-        b ARRAY<STRUCT<c:INT, d:STRING>>,
-        e MAP<STRING,INT>,
-        f string,
-        g ARRAY<INT>,
-        h STRUCT<i:DOUBLE>
-      ) STORED AS PARQUET;
-    """.format(self.COMPLEX_COLUMN_TABLE)
-
-    insert_stmt = """
-      INSERT OVERWRITE TABLE {0}
-      SELECT 1, array(named_struct("c", 2, "d", "foo")), map("key1", 10, "key2", 20),
-        "bar", array(2,3,4,5), named_struct("i", 1.23)
-      FROM functional_parquet.tinytable limit 2;
-    """.format(self.COMPLEX_COLUMN_TABLE)
-
-    check_call(["hive", "-e", create_table_stmt])
-    check_call(["hive", "-e", insert_stmt])
-
-    self.execute_query("invalidate metadata %s" % self.COMPLEX_COLUMN_TABLE)
-
-    result = self.execute_query("select count(*) from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 1)
-    assert(result.data[0] == "2")
-
-    result = self.execute_query("select a from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 2)
-    assert(result.data[1] == "1")
-
-    result = self.execute_query("select f from %s" % self.COMPLEX_COLUMN_TABLE)
-    assert(len(result.data) == 2)
-    assert(result.data[1] == "bar")
-
-  @classmethod
-  def teardown_class(cls):
-    cls._drop_complex_column_table()
-
-  @classmethod
-  def _drop_complex_column_table(cls):
-    cls.client.execute("drop table if exists %s" % cls.COMPLEX_COLUMN_TABLE)
+    # Check that the schema does not use the UTF8 annotation except for CHAR and VARCHAR
+    # columns
+    a_schema_elt, b_schema_elt, c_schema_elt, d_schema_elt = get_schema_elements()
+    assert a_schema_elt.converted_type == None
+    assert b_schema_elt.converted_type == ConvertedType.UTF8
+    assert c_schema_elt.converted_type == ConvertedType.UTF8
+    assert d_schema_elt.converted_type == None
 
 # We use various scan range lengths to exercise corner cases in the HDFS scanner more
 # thoroughly. In particular, it will exercise:

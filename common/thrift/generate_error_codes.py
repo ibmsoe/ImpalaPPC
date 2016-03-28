@@ -22,7 +22,9 @@
 # TODO Add support for SQL Error Codes
 #      https://msdn.microsoft.com/en-us/library/ms714687%28v=vs.85%29.aspx
 error_codes = (
-  ("OK", 1, ""),
+  ("OK", 0, ""),
+
+  ("UNUSED", 1, "<UNUSED>"),
 
   ("GENERAL", 2, "$0"),
 
@@ -174,7 +176,8 @@ error_codes = (
   ("PARQUET_UNRECOGNIZED_SCHEMA", 55, "File '$0' has an incompatible Parquet schema for "
    "column '$1'. Column type: $2, Parquet schema:\\n$3"),
 
-  ("COLLECTION_ALLOC_FAILED", 56, "Failed to allocate buffer for collection '$0'."),
+  ("COLLECTION_ALLOC_FAILED", 56, "Failed to allocate $0 bytes for collection '$1'.\\n"
+   "Current buffer size: $2 num tuples: $3."),
 
   ("TMP_DEVICE_BLACKLISTED", 57,
     "Temporary device for directory $0 is blacklisted from a previous error and cannot "
@@ -201,31 +204,58 @@ error_codes = (
   ("AVRO_BAD_VERSION_HEADER", 64, "File '$0' has an invalid version header: $1\\n"
    "Make sure the file is an Avro data file."),
 
-  ("IMPALA_2598_KERBEROS_SSL_DISALLOWED", 65, "Enabling server-to-server SSL connections "
-  "in conjunction with Kerberos authentication is not supported at the same time. "
-  "Disable server-to-server SSL by unsetting --ssl_client_ca_certificate."),
+  ("UDF_MEM_LIMIT_EXCEEDED", 65, "$0's allocations exceeded memory limits."),
 
-  ("UDF_MEM_LIMIT_EXCEEDED", 66, "$0's allocations exceeded memory limits.")
+  ("BTS_BLOCK_OVERFLOW", 66, "Cannot process row that is bigger than the IO size "
+   "(row_size=$0, null_indicators_size=$1). To run this query, increase the IO size "
+   "(--read_size option)."),
+
+  ("COMPRESSED_FILE_MULTIPLE_BLOCKS", 67,
+   "For better performance, snappy-, gzip-, and bzip-compressed files "
+   "should not be split into multiple HDFS blocks. file=$0 offset $1"),
+
+  ("COMPRESSED_FILE_BLOCK_CORRUPTED", 68,
+   "$0 Data error, likely data corrupted in this block."),
+
+  ("COMPRESSED_FILE_DECOMPRESSOR_ERROR", 69, "$0 Decompressor error at $1, code=$2"),
+
+  ("COMPRESSED_FILE_DECOMPRESSOR_NO_PROGRESS", 70,
+   "Decompression failed to make progress, but end of input is not reached. "
+   "File appears corrupted. file=$0"),
+
+  ("COMPRESSED_FILE_TRUNCATED", 71,
+   "Unexpected end of compressed file. File may be truncated. file=$0"),
+
+  ("DATASTREAM_SENDER_TIMEOUT", 72, "Sender timed out waiting for receiver fragment "
+   "instance: $0"),
+
+  ("KUDU_IMPALA_TYPE_MISSING", 73, "Kudu type $0 is not available in Impala."),
+
+  ("IMPALA_KUDU_TYPE_MISSING", 74, "Impala type $0 is not available in Kudu."),
+
+  ("KUDU_NOT_SUPPORTED_ON_OS", 75, "Kudu is not supported on this operating system.")
+
 )
 
 import sys
 import os
 
 # Verifies the uniqueness of the error constants and numeric error codes.
+# Numeric codes must start from 0, be in order and have no gaps
 def check_duplicates(codes):
   constants = {}
-  num_codes = {}
+  next_num_code = 0
   for row in codes:
     if row[0] in constants:
       print("Constant %s already used, please check definition of '%s'!" % \
             (row[0], constants[row[0]]))
       exit(1)
-    if row[1] in num_codes:
-      print("Numeric error code %d already used, please check definition of '%s'!" % \
-            (row[1], num_codes[row[1]]))
+    if row[1] != next_num_code:
+      print("Numeric error codes must start from 0, be in order, and not have any gaps: "
+            "got %d, expected %d" % (row[1], next_num_code))
       exit(1)
+    next_num_code += 1
     constants[row[0]] = row[2]
-    num_codes[row[1]] = row[2]
 
 preamble = """
 // Copyright 2015 Cloudera Inc.
@@ -262,7 +292,7 @@ fid = open(target_file, "w+")
 try:
   fid.write(preamble)
   fid.write("""\nenum TErrorCode {\n""")
-  fid.write(",\n".join(map(lambda x: "  %s" % x[0], error_codes)))
+  fid.write(",\n".join(map(lambda x: "  %s = %d" % (x[0], x[1]), error_codes)))
   fid.write("\n}")
   fid.write("\n")
   fid.write("const list<string> TErrorMessage = [\n")

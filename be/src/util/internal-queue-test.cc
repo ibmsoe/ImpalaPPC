@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include "common/atomic.h"
 #include "util/internal-queue.h"
 
 #include "common/names.h"
@@ -149,10 +150,10 @@ const int VALIDATE_INTERVAL = 10000;
 
 // CHECK() is not thread safe so return the result in *failed.
 void ProducerThread(InternalQueue<IntNode>* queue, int num_inserts,
-    vector<IntNode>* nodes, AtomicInt<int32_t>* counter, bool* failed) {
+    vector<IntNode>* nodes, AtomicInt32* counter, bool* failed) {
   for (int i = 0; i < num_inserts && !*failed; ++i) {
     // Get the next index to queue.
-    AtomicInt<int32_t> value = (*counter)++;
+    int32_t value = counter->Add(1) - 1;
     nodes->at(value).value = value;
     queue->Enqueue(&nodes->at(value));
     if (i % VALIDATE_INTERVAL == 0) {
@@ -203,7 +204,7 @@ TEST(InternalQueue, TestClear) {
 
 TEST(InternalQueue, TestSingleProducerSingleConsumer) {
   vector<IntNode> nodes;
-  AtomicInt<int32_t> counter;
+  AtomicInt32 counter;
   nodes.resize(1000000);
   vector<int> results;
 
@@ -215,7 +216,7 @@ TEST(InternalQueue, TestSingleProducerSingleConsumer) {
   ASSERT_TRUE(queue.empty());
   ASSERT_EQ(results.size(), nodes.size());
 
-  counter = 0;
+  counter.Store(0);
   results.clear();
   thread producer_thread(ProducerThread, &queue, nodes.size(), &nodes, &counter, &failed);
   thread consumer_thread(ConsumerThread, &queue, nodes.size(), 1, &results, &failed);
@@ -232,7 +233,7 @@ TEST(InternalQueue, TestMultiProducerMultiConsumer) {
 
   bool failed = false;
   for (int num_producers = 1; num_producers < 5; num_producers += 3) {
-    AtomicInt<int32_t> counter;
+    AtomicInt32 counter;
     const int NUM_CONSUMERS = 4;
     ASSERT_EQ(nodes.size() % NUM_CONSUMERS, 0);
     ASSERT_EQ(nodes.size() % num_producers, 0);

@@ -16,9 +16,9 @@
 # Starts up the StateStored with the specified command line arguments.
 
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
-BUILD_TYPE=debug
+BUILD_TYPE=latest
 STATESTORED_ARGS=""
 BINARY_BASE_DIR=${IMPALA_HOME}/be/build
 
@@ -31,6 +31,8 @@ do
       ;;
     -build_type=release)
       BUILD_TYPE=release
+      ;;
+    -build_type=latest)
       ;;
     -build_type=*)
       echo "Invalid build type. Valid values are: debug, release"

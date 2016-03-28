@@ -32,6 +32,7 @@
 #include "exec/hash-join-node.h"
 #include "exec/hbase-scan-node.h"
 #include "exec/hdfs-scan-node.h"
+#include "exec/kudu-scan-node.h"
 #include "exec/nested-loop-join-node.h"
 #include "exec/partitioned-aggregation-node.h"
 #include "exec/partitioned-hash-join-node.h"
@@ -81,6 +82,11 @@ void ExecNode::RowBatchQueue::AddBatch(RowBatch* batch) {
   }
 }
 
+bool ExecNode::RowBatchQueue::AddBatchWithTimeout(RowBatch* batch,
+    int64_t timeout_micros) {
+  return BlockingPutWithTimeout(batch, timeout_micros);
+}
+
 RowBatch* ExecNode::RowBatchQueue::GetBatch() {
   RowBatch* result = NULL;
   if (BlockingGet(&result)) return result;
@@ -125,7 +131,7 @@ ExecNode::ExecNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl
 ExecNode::~ExecNode() {
 }
 
-Status ExecNode::Init(const TPlanNode& tnode) {
+Status ExecNode::Init(const TPlanNode& tnode, RuntimeState* state) {
   RETURN_IF_ERROR(
       Expr::CreateExprTrees(pool_, tnode.conjuncts, &conjunct_ctxs_));
   return Status::OK();
@@ -183,13 +189,8 @@ void ExecNode::Close(RuntimeState* state) {
   if (mem_tracker() != NULL && mem_tracker()->consumption() != 0) {
     LOG(WARNING) << "Query " << state->query_id() << " may have leaked memory." << endl
                  << state->instance_mem_tracker()->LogUsage();
-    // Workaround: Until IMPALA-1867 is fixed, single I/O block MemTracker accounting
-    // leaks are possible.  These are harmless, see IMPALA-1867.
-    // TODO: remove guard when IMPALA-1867 is fixed.
-    if (mem_tracker()->consumption() != state->block_mgr()->max_block_size()) {
-      DCHECK_EQ(mem_tracker()->consumption(), 0)
-          << "Leaked memory." << endl << state->instance_mem_tracker()->LogUsage();
-    }
+    DCHECK_EQ(mem_tracker()->consumption(), 0)
+        << "Leaked memory." << endl << state->instance_mem_tracker()->LogUsage();
   }
 }
 
@@ -204,14 +205,22 @@ void ExecNode::AddRuntimeExecOption(const string& str) {
   runtime_profile()->AddInfoString("ExecOption", runtime_exec_options_);
 }
 
-Status ExecNode::CreateTree(ObjectPool* pool, const TPlan& plan,
-                            const DescriptorTbl& descs, ExecNode** root) {
+void ExecNode::AddCodegenExecOption(bool codegen_enabled, const string& extra_info,
+    const string& extra_label) {
+  string str = codegen_enabled ? "Codegen Enabled" : "Codegen Disabled";
+  if (!extra_info.empty()) str = str + ": " + extra_info;
+  if (!extra_label.empty()) str = extra_label + " " + str;
+  AddRuntimeExecOption(str);
+}
+
+Status ExecNode::CreateTree(RuntimeState* state, const TPlan& plan,
+    const DescriptorTbl& descs, ExecNode** root) {
   if (plan.nodes.size() == 0) {
     *root = NULL;
     return Status::OK();
   }
   int node_idx = 0;
-  Status status = CreateTreeHelper(pool, plan.nodes, descs, NULL, &node_idx, root);
+  Status status = CreateTreeHelper(state, plan.nodes, descs, NULL, &node_idx, root);
   if (status.ok() && node_idx + 1 != plan.nodes.size()) {
     status = Status(
         "Plan tree only partially reconstructed. Not all thrift nodes were used.");
@@ -223,13 +232,8 @@ Status ExecNode::CreateTree(ObjectPool* pool, const TPlan& plan,
   return status;
 }
 
-Status ExecNode::CreateTreeHelper(
-    ObjectPool* pool,
-    const vector<TPlanNode>& tnodes,
-    const DescriptorTbl& descs,
-    ExecNode* parent,
-    int* node_idx,
-    ExecNode** root) {
+Status ExecNode::CreateTreeHelper(RuntimeState* state, const vector<TPlanNode>& tnodes,
+    const DescriptorTbl& descs, ExecNode* parent, int* node_idx, ExecNode** root) {
   // propagate error case
   if (*node_idx >= tnodes.size()) {
     return Status("Failed to reconstruct plan tree from thrift.");
@@ -238,7 +242,7 @@ Status ExecNode::CreateTreeHelper(
 
   int num_children = tnode.num_children;
   ExecNode* node = NULL;
-  RETURN_IF_ERROR(CreateNode(pool, tnode, descs, &node));
+  RETURN_IF_ERROR(CreateNode(state->obj_pool(), tnode, descs, &node, state));
   if (parent != NULL) {
     parent->children_.push_back(node);
   } else {
@@ -246,7 +250,7 @@ Status ExecNode::CreateTreeHelper(
   }
   for (int i = 0; i < num_children; ++i) {
     ++*node_idx;
-    RETURN_IF_ERROR(CreateTreeHelper(pool, tnodes, descs, node, node_idx, NULL));
+    RETURN_IF_ERROR(CreateTreeHelper(state, tnodes, descs, node, node_idx, NULL));
     // we are expecting a child, but have used all nodes
     // this means we have been given a bad tree and must fail
     if (*node_idx >= tnodes.size()) {
@@ -255,7 +259,7 @@ Status ExecNode::CreateTreeHelper(
   }
 
   // Call Init() after children have been set and Init()'d themselves
-  RETURN_IF_ERROR(node->Init(tnode));
+  RETURN_IF_ERROR(node->Init(tnode, state));
 
   // build up tree of profiles; add children >0 first, so that when we print
   // the profile, child 0 is printed last (makes the output more readable)
@@ -270,17 +274,25 @@ Status ExecNode::CreateTreeHelper(
 }
 
 Status ExecNode::CreateNode(ObjectPool* pool, const TPlanNode& tnode,
-                            const DescriptorTbl& descs, ExecNode** node) {
+    const DescriptorTbl& descs, ExecNode** node, RuntimeState* state) {
   stringstream error_msg;
   switch (tnode.node_type) {
     case TPlanNodeType::HDFS_SCAN_NODE:
       *node = pool->Add(new HdfsScanNode(pool, tnode, descs));
+      // If true, this node requests codegen over interpretation for conjuncts
+      // evaluation whenever possible. Turn codegen on for expr evaluation for
+      // the entire fragment.
+      if (tnode.hdfs_scan_node.codegen_conjuncts) state->SetCodegenExpr();
+      (*node)->AddCodegenExecOption(state->ShouldCodegenExpr(), "", "Expr Evaluation");
       break;
     case TPlanNodeType::HBASE_SCAN_NODE:
       *node = pool->Add(new HBaseScanNode(pool, tnode, descs));
       break;
     case TPlanNodeType::DATA_SOURCE_NODE:
       *node = pool->Add(new DataSourceScanNode(pool, tnode, descs));
+      break;
+    case TPlanNodeType::KUDU_SCAN_NODE:
+      *node = pool->Add(new KuduScanNode(pool, tnode, descs));
       break;
     case TPlanNodeType::AGGREGATION_NODE:
       if (FLAGS_enable_partitioned_aggregation) {
@@ -393,6 +405,7 @@ void ExecNode::CollectNodes(TPlanNodeType::type node_type, vector<ExecNode*>* no
 void ExecNode::CollectScanNodes(vector<ExecNode*>* nodes) {
   CollectNodes(TPlanNodeType::HDFS_SCAN_NODE, nodes);
   CollectNodes(TPlanNodeType::HBASE_SCAN_NODE, nodes);
+  CollectNodes(TPlanNodeType::KUDU_SCAN_NODE, nodes);
 }
 
 void ExecNode::InitRuntimeProfile(const string& name) {
@@ -476,19 +489,15 @@ void ExecNode::AddExprCtxsToFree(const SortExecExprs& sort_exec_exprs) {
 // false:                                            ; preds = %continue, %entry
 //   ret i1 false
 // }
-Function* ExecNode::CodegenEvalConjuncts(
-    RuntimeState* state, const vector<ExprContext*>& conjunct_ctxs, const char* name) {
+Status ExecNode::CodegenEvalConjuncts(RuntimeState* state,
+    const vector<ExprContext*>& conjunct_ctxs, Function** fn, const char* name) {
   Function* conjunct_fns[conjunct_ctxs.size()];
   for (int i = 0; i < conjunct_ctxs.size(); ++i) {
-    Status status =
-        conjunct_ctxs[i]->root()->GetCodegendComputeFn(state, &conjunct_fns[i]);
-    if (!status.ok()) {
-      VLOG_QUERY << "Could not codegen EvalConjuncts: " << status.GetDetail();
-      return NULL;
-    }
+    RETURN_IF_ERROR(
+        conjunct_ctxs[i]->root()->GetCodegendComputeFn(state, &conjunct_fns[i]));
   }
   LlvmCodeGen* codegen;
-  if (!state->GetCodegen(&codegen).ok()) return NULL;
+  RETURN_IF_ERROR(state->GetCodegen(&codegen));
 
   // Construct function signature to match
   // bool EvalConjuncts(Expr** exprs, int num_exprs, TupleRow* row)
@@ -510,16 +519,16 @@ Function* ExecNode::CodegenEvalConjuncts(
 
   LlvmCodeGen::LlvmBuilder builder(codegen->context());
   Value* args[3];
-  Function* fn = prototype.GeneratePrototype(&builder, args);
+  *fn = prototype.GeneratePrototype(&builder, args);
   Value* ctxs_arg = args[0];
   Value* tuple_row_arg = args[2];
 
   if (conjunct_ctxs.size() > 0) {
     LLVMContext& context = codegen->context();
-    BasicBlock* false_block = BasicBlock::Create(context, "false", fn);
+    BasicBlock* false_block = BasicBlock::Create(context, "false", *fn);
 
     for (int i = 0; i < conjunct_ctxs.size(); ++i) {
-      BasicBlock* true_block = BasicBlock::Create(context, "continue", fn, false_block);
+      BasicBlock* true_block = BasicBlock::Create(context, "continue", *fn, false_block);
 
       Value* ctx_arg_ptr = builder.CreateConstGEP1_32(ctxs_arg, i, "ctx_ptr");
       Value* ctx_arg = builder.CreateLoad(ctx_arg_ptr, "ctx");
@@ -547,7 +556,12 @@ Function* ExecNode::CodegenEvalConjuncts(
     builder.CreateRet(codegen->true_value());
   }
 
-  return codegen->FinalizeFunction(fn);
+  *fn = codegen->FinalizeFunction(*fn);
+  if (*fn == NULL) {
+    return Status("ExecNode::CodegenEvalConjuncts(): codegen'd EvalConjuncts() function "
+        "failed verification, see log");
+  }
+  return Status::OK();
 }
 
 }

@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 #include "service/query-exec-state.h"
 
 #include <limits>
@@ -62,6 +61,7 @@ ImpalaServer::QueryExecState::QueryExecState(
     last_active_time_(numeric_limits<int64_t>::max()),
     ref_count_(0L),
     exec_env_(exec_env),
+    is_block_on_wait_joining_(false),
     session_(session),
     schedule_(NULL),
     coord_(NULL),
@@ -133,6 +133,8 @@ Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
   profile_.AddChild(&server_profile_);
   summary_profile_.AddInfoString("Query Type", PrintTStmtType(stmt_type()));
   summary_profile_.AddInfoString("Query State", PrintQueryState(query_state_));
+  summary_profile_.AddInfoString("Query Options (non default)",
+      DebugQueryOptions(query_ctx_.request.query_options));
 
   switch (exec_request->stmt_type) {
     case TStmtType::QUERY:
@@ -181,7 +183,8 @@ Status ImpalaServer::QueryExecState::Exec(TExecRequest* exec_request) {
         RETURN_IF_ERROR(SetQueryOption(
             exec_request_.set_query_option_request.key,
             exec_request_.set_query_option_request.value,
-            &session_->default_query_options));
+            &session_->default_query_options,
+            &session_->set_query_options_mask));
       } else {
         // "SET" returns a table of all query options.
         map<string, string> config;
@@ -269,7 +272,8 @@ Status ImpalaServer::QueryExecState::ExecLocalCatalogOp(
           params->__isset.show_pattern ? (&params->show_pattern) : NULL;
       RETURN_IF_ERROR(frontend_->GetFunctions(
           params->category, params->db, fn_pattern, &query_ctx_.session, &functions));
-      SetResultSet(functions.fn_ret_types, functions.fn_signatures);
+      SetResultSet(functions.fn_ret_types, functions.fn_signatures,
+          functions.fn_binary_types, functions.fn_persistence);
       return Status::OK();
     }
     case TCatalogOpType::SHOW_ROLES: {
@@ -422,10 +426,9 @@ Status ImpalaServer::QueryExecState::ExecQueryOrDmlRequest(
     DCHECK(exec_env_->resource_broker() != NULL);
   }
   schedule_.reset(new QuerySchedule(query_id(), query_exec_request,
-      exec_request_.query_options, effective_user(), &summary_profile_, query_events_));
-  coord_.reset(new Coordinator(exec_env_, query_events_));
+      exec_request_.query_options, &summary_profile_, query_events_));
+  coord_.reset(new Coordinator(exec_request_.query_options, exec_env_, query_events_));
   Status status = exec_env_->scheduler()->Schedule(coord_.get(), schedule_.get());
-  summary_profile_.AddInfoString("Request Pool", schedule_->request_pool());
   if (FLAGS_enable_rm) {
     if (status.ok()) {
       stringstream reservation_request_ss;
@@ -565,9 +568,24 @@ void ImpalaServer::QueryExecState::WaitAsync() {
 }
 
 void ImpalaServer::QueryExecState::BlockOnWait() {
-  if (wait_thread_.get() != NULL) {
+  unique_lock<mutex> l(lock_);
+  if (wait_thread_.get() == NULL) return;
+  if (!is_block_on_wait_joining_) {
+    // No other thread is already joining on wait_thread_, so this thread needs to do
+    // it.  Other threads will need to block on the cond-var.
+    is_block_on_wait_joining_ = true;
+    l.unlock();
     wait_thread_->Join();
+    l.lock();
+    is_block_on_wait_joining_ = false;
     wait_thread_.reset();
+    block_on_wait_cv_.notify_all();
+  } else {
+    // Another thread is already joining with wait_thread_.  Block on the cond-var
+    // until the Join() executed in the other thread has completed.
+    do {
+      block_on_wait_cv_.wait(l);
+    } while (is_block_on_wait_joining_);
   }
 }
 

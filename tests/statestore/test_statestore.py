@@ -87,14 +87,11 @@ class KillableThreadedServer(TServer):
     TServer.__init__(self, *args)
     self.daemon = kwargs.get("daemon", False)
     self.is_shutdown = False
-    self.transports = set()
     self.port = self.serverTransport.port
 
   def shutdown(self):
     self.is_shutdown = True
     self.serverTransport.close()
-    for t in self.transports:
-      t.close()
     self.wait_until_down()
 
   def wait_until_up(self, num_tries=10):
@@ -130,7 +127,6 @@ class KillableThreadedServer(TServer):
 
   def handle(self, client):
     itrans = self.inputTransportFactory.getTransport(client)
-    self.transports.add(itrans)
     otrans = self.outputTransportFactory.getTransport(client)
     iprot = self.inputProtocolFactory.getProtocol(itrans)
     oprot = self.outputProtocolFactory.getProtocol(otrans)
@@ -144,7 +140,6 @@ class KillableThreadedServer(TServer):
 
     itrans.close()
     otrans.close()
-    self.transports.remove(itrans)
 
 
 class StatestoreSubscriber(object):
@@ -297,7 +292,7 @@ class StatestoreSubscriber(object):
     finally:
       self.update_event.release()
 
-  def wait_for_failure(self, timeout=20):
+  def wait_for_failure(self, timeout=40):
     """Waits until this subscriber no longer appears in the statestore's subscriber
     list. If 'timeout' seconds pass, throws an exception."""
     start = time.time()

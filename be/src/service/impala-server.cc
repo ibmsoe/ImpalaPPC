@@ -25,7 +25,7 @@
 #include <boost/bind.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
-#include <google/malloc_extension.h>
+#include <gperftools/malloc_extension.h>
 #include <gutil/strings/substitute.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -55,7 +55,6 @@
 #include "service/fragment-exec-state.h"
 #include "service/impala-internal-service.h"
 #include "service/query-exec-state.h"
-#include "service/query-options.h"
 #include "scheduling/simple-scheduler.h"
 #include "util/bit-util.h"
 #include "util/cgroups-mgr.h"
@@ -141,6 +140,9 @@ DEFINE_string(profile_log_dir, "", "The directory in which profile log files are
     " written. If blank, defaults to <log_file_dir>/profiles");
 DEFINE_int32(max_profile_log_file_size, 5000, "The maximum size (in queries) of the "
     "profile log file before a new one is created");
+DEFINE_int32(max_profile_log_files, 10, "Maximum number of profile log files to "
+    "retain. The most recent log files are retained. If set to 0, all log files "
+    "are retained.");
 
 DEFINE_int32(cancellation_thread_pool_size, 5,
     "(Advanced) Size of the thread-pool processing cancellations due to node failure");
@@ -247,8 +249,7 @@ ImpalaServer::ImpalaServer(ExecEnv* exec_env)
   if (!status.ok()) {
     LOG(ERROR) << status.GetDetail();
     if (FLAGS_abort_on_config_error) {
-      LOG(ERROR) << "Aborting Impala Server startup due to improper configuration";
-      exit(1);
+      LOG(FATAL) << "Aborting Impala Server startup due to improper configuration";
     }
   }
 
@@ -256,9 +257,8 @@ ImpalaServer::ImpalaServer(ExecEnv* exec_env)
   if (!status.ok()) {
     LOG(ERROR) << status.GetDetail();
     if (FLAGS_abort_on_config_error) {
-      LOG(ERROR) << "Aborting Impala Server startup due to improperly "
+      LOG(FATAL) << "Aborting Impala Server startup due to improperly "
                  << "configured scratch directories.";
-      exit(1);
     }
   }
 
@@ -268,15 +268,13 @@ ImpalaServer::ImpalaServer(ExecEnv* exec_env)
   }
 
   if (!InitAuditEventLogging().ok()) {
-    LOG(ERROR) << "Aborting Impala Server startup due to failure initializing "
+    LOG(FATAL) << "Aborting Impala Server startup due to failure initializing "
                << "audit event logging";
-    exit(1);
   }
 
   if (!InitLineageLogging().ok()) {
-    LOG(ERROR) << "Aborting Impala Server startup due to failure initializing "
+    LOG(FATAL) << "Aborting Impala Server startup due to failure initializing "
                << "lineage logging";
-    exit(1);
   }
 
   if (!FLAGS_authorized_proxy_user_config.empty()) {
@@ -290,10 +288,9 @@ ImpalaServer::ImpalaServer(ExecEnv* exec_env)
       BOOST_FOREACH(const string& config, proxy_user_config) {
         size_t pos = config.find("=");
         if (pos == string::npos) {
-          LOG(ERROR) << "Invalid proxy user configuration. No mapping value specified "
+          LOG(FATAL) << "Invalid proxy user configuration. No mapping value specified "
                      << "for the proxy user. For more information review usage of the "
                      << "--authorized_proxy_user_config flag: " << config;
-          exit(1);
         }
         string proxy_user = config.substr(0, pos);
         string config_str = config.substr(pos + 1);
@@ -380,14 +377,16 @@ Status ImpalaServer::LogLineageRecord(const QueryExecState& query_exec_state) {
     return Status::OK();
   }
   // Set the query end time in TLineageGraph
-  lineage_graph.__set_ended(query_exec_state.end_time().ToUnixTimeInUTC());
-  const Status& status = lineage_logger_->AppendEntry(
-      LineageUtil::TLineageToJSON(lineage_graph));
+  time_t utc_end_time;
+  query_exec_state.end_time().ToUnixTimeInUTC(&utc_end_time);
+  lineage_graph.__set_ended(utc_end_time);
+  string lineage_record;
+  LineageUtil::TLineageToJSON(lineage_graph, &lineage_record);
+  const Status& status = lineage_logger_->AppendEntry(lineage_record);
   if (!status.ok()) {
     LOG(ERROR) << "Unable to record query lineage record: " << status.GetDetail();
     if (FLAGS_abort_on_failed_lineage_event) {
-      LOG(ERROR) << "Shutting down Impala Server due to abort_on_failed_lineage_event=true";
-      exit(1);
+      LOG(FATAL) << "Shutting down Impala Server due to abort_on_failed_lineage_event=true";
     }
   }
   return status;
@@ -478,8 +477,7 @@ Status ImpalaServer::LogAuditRecord(const ImpalaServer::QueryExecState& exec_sta
   if (!status.ok()) {
     LOG(ERROR) << "Unable to record audit event record: " << status.GetDetail();
     if (FLAGS_abort_on_failed_audit_event) {
-      LOG(ERROR) << "Shutting down Impala Server due to abort_on_failed_audit_event=true";
-      exit(1);
+      LOG(FATAL) << "Shutting down Impala Server due to abort_on_failed_audit_event=true";
     }
   }
   return status;
@@ -552,7 +550,8 @@ Status ImpalaServer::InitProfileLogging() {
     FLAGS_profile_log_dir = ss.str();
   }
   profile_logger_.reset(new SimpleLogger(FLAGS_profile_log_dir,
-      PROFILE_LOG_FILE_PREFIX, FLAGS_max_profile_log_file_size));
+      PROFILE_LOG_FILE_PREFIX, FLAGS_max_profile_log_file_size,
+      FLAGS_max_profile_log_files));
   RETURN_IF_ERROR(profile_logger_->Init());
   profile_log_file_flush_thread_.reset(new Thread("impala-server", "log-flush-thread",
       &ImpalaServer::LogFileFlushThread, this));
@@ -646,9 +645,8 @@ void ImpalaServer::AuditEventLoggerFlushThread() {
     if (!status.ok()) {
       LOG(ERROR) << "Error flushing audit event log: " << status.GetDetail();
       if (FLAGS_abort_on_failed_audit_event) {
-        LOG(ERROR) << "Shutting down Impala Server due to "
+        LOG(FATAL) << "Shutting down Impala Server due to "
                    << "abort_on_failed_audit_event=true";
-        exit(1);
       }
     }
   }
@@ -661,9 +659,8 @@ void ImpalaServer::LineageLoggerFlushThread() {
     if (!status.ok()) {
       LOG(ERROR) << "Error flushing lineage event log: " << status.GetDetail();
       if (FLAGS_abort_on_failed_lineage_event) {
-        LOG(ERROR) << "Shutting down Impala Server due to "
+        LOG(FATAL) << "Shutting down Impala Server due to "
                    << "abort_on_failed_lineage_event=true";
-        exit(1);
       }
     }
   }
@@ -708,11 +705,51 @@ void ImpalaServer::ArchiveQuery(const QueryExecState& query) {
 
 ImpalaServer::~ImpalaServer() {}
 
+void ImpalaServer::AddPoolQueryOptions(TQueryCtx* ctx,
+    const QueryOptionsMask& override_options_mask) {
+  // Errors are not returned and are only logged (at level 2) because some incoming
+  // requests are not expected to be mapped to a pool and will not have query options,
+  // e.g. 'use [db];'. For requests that do need to be mapped to a pool successfully, the
+  // pool is resolved again during scheduling and errors are handled at that point.
+  string resolved_pool;
+  Status status = exec_env_->request_pool_service()->ResolveRequestPool(*ctx,
+      &resolved_pool);
+  if (!status.ok()) {
+    VLOG_RPC << "Not adding pool query options for query=" << ctx->query_id
+             << " ResolveRequestPool status: " << status.GetDetail();
+    return;
+  }
+
+  TPoolConfig config;
+  status = exec_env_->request_pool_service()->GetPoolConfig(resolved_pool, &config);
+  if (!status.ok()) {
+    VLOG_RPC << "Not adding pool query options for query=" << ctx->query_id
+             << " GetConfigPool status: " << status.GetDetail();
+    return;
+  }
+
+  TQueryOptions pool_options;
+  QueryOptionsMask set_pool_options_mask;
+  status = ParseQueryOptions(config.default_query_options, &pool_options,
+      &set_pool_options_mask);
+  if (!status.ok()) {
+    VLOG_RPC << "Not adding pool query options for query=" << ctx->query_id
+             << " ParseQueryOptions status: " << status.GetDetail();
+    return;
+  }
+
+  QueryOptionsMask overlay_mask = override_options_mask & set_pool_options_mask;
+  VLOG_RPC << "Parsed pool options: " << DebugQueryOptions(pool_options)
+           << " override_options_mask=" << override_options_mask.to_string()
+           << " set_pool_mask=" << set_pool_options_mask.to_string()
+           << " overlay_mask=" << overlay_mask.to_string();
+  OverlayQueryOptions(pool_options, overlay_mask, &ctx->request.query_options);
+}
+
 Status ImpalaServer::Execute(TQueryCtx* query_ctx,
     shared_ptr<SessionState> session_state,
     shared_ptr<QueryExecState>* exec_state) {
   PrepareQueryContext(query_ctx);
-  bool registered_exec_state;
   ImpaladMetrics::IMPALA_SERVER_NUM_QUERIES->Increment(1L);
 
   // Redact the SQL stmt and update the query context
@@ -720,6 +757,7 @@ Status ImpalaServer::Execute(TQueryCtx* query_ctx,
   Redact(&stmt);
   query_ctx->request.__set_redacted_stmt((const string) stmt);
 
+  bool registered_exec_state;
   Status status = ExecuteInternal(*query_ctx, session_state, &registered_exec_state,
       exec_state);
   if (!status.ok() && registered_exec_state) {
@@ -887,8 +925,12 @@ Status ImpalaServer::UnregisterQuery(const TUniqueId& query_id, bool check_infli
 
   exec_state->Done();
 
-  double duration_ms = 1000 * (exec_state->end_time().ToSubsecondUnixTime() -
-      exec_state->start_time().ToSubsecondUnixTime());
+  double ut_end_time, ut_start_time;
+  double duration_ms = 0.0;
+  if (LIKELY(exec_state->end_time().ToSubsecondUnixTime(&ut_end_time))
+      && LIKELY(exec_state->start_time().ToSubsecondUnixTime(&ut_start_time))) {
+    duration_ms = 1000 * (ut_end_time - ut_start_time);
+  }
 
   // duration_ms can be negative when the local timezone changes during query execution.
   if (duration_ms >= 0) {
@@ -1044,7 +1086,7 @@ Status ImpalaServer::GetSessionState(const TUniqueId& session_id,
 void ImpalaServer::ReportExecStatus(
     TReportExecStatusResult& return_val, const TReportExecStatusParams& params) {
   VLOG_FILE << "ReportExecStatus() query_id=" << params.query_id
-            << " backend#=" << params.backend_num
+            << " fragment instance#=" << params.fragment_instance_idx
             << " instance_id=" << params.fragment_instance_id
             << " done=" << (params.done ? "true" : "false");
   // TODO: implement something more efficient here, we're currently
@@ -1060,10 +1102,11 @@ void ImpalaServer::ReportExecStatus(
     return_val.status.__set_status_code(TErrorCode::INTERNAL_ERROR);
     const string& err = Substitute("ReportExecStatus(): Received report for unknown "
         "query ID (probably closed or cancelled). (query_id: $0, backend: $1, instance:"
-        " $2 done: $3)", PrintId(params.query_id), params.backend_num,
-        PrintId(params.fragment_instance_id), params.done);
+        " $2 done: $3)", PrintId(params.query_id),
+        params.fragment_instance_idx, PrintId(params.fragment_instance_id),
+        params.done);
     return_val.status.error_msgs.push_back(err);
-    VLOG_QUERY << err;
+    // TODO: Re-enable logging when this only happens once per fragment.
     return;
   }
   exec_state->coord()->UpdateFragmentExecStatus(params).SetTStatus(&return_val);
@@ -1074,7 +1117,7 @@ void ImpalaServer::TransmitData(
   VLOG_ROW << "TransmitData(): instance_id=" << params.dest_fragment_instance_id
            << " node_id=" << params.dest_node_id
            << " #rows=" << params.row_batch.num_rows
-           << "sender_id=" << params.sender_id
+           << " sender_id=" << params.sender_id
            << " eos=" << (params.eos ? "true" : "false");
   // TODO: fix Thrift so we can simply take ownership of thrift_batch instead
   // of having to copy its data
@@ -1097,12 +1140,13 @@ void ImpalaServer::TransmitData(
 }
 
 void ImpalaServer::InitializeConfigVariables() {
-  Status status = ParseQueryOptions(FLAGS_default_query_options, &default_query_options_);
+  QueryOptionsMask set_query_options; // unused
+  Status status = ParseQueryOptions(FLAGS_default_query_options, &default_query_options_,
+      &set_query_options);
   if (!status.ok()) {
     // Log error and exit if the default query options are invalid.
-    LOG(ERROR) << "Invalid default query options. Please check -default_query_options.\n"
+    LOG(FATAL) << "Invalid default query options. Please check -default_query_options.\n"
                << status.GetDetail();
-    exit(1);
   }
   LOG(INFO) << "Default query options:" << ThriftDebugString(default_query_options_);
 
@@ -1315,21 +1359,54 @@ void ImpalaServer::CatalogUpdateCallback(
 
 Status ImpalaServer::ProcessCatalogUpdateResult(
     const TCatalogUpdateResult& catalog_update_result, bool wait_for_all_subscribers) {
-  // If this this update result contains a catalog object to add or remove, directly apply
-  // the update to the local impalad's catalog cache. Otherwise, wait for a statestore
+  // If this update result contains catalog objects to add or remove, directly apply the
+  // updates to the local impalad's catalog cache. Otherwise, wait for a statestore
   // heartbeat that contains this update version.
-  if ((catalog_update_result.__isset.updated_catalog_object ||
-      catalog_update_result.__isset.removed_catalog_object)) {
+  if (catalog_update_result.__isset.updated_catalog_object_DEPRECATED ||
+      catalog_update_result.__isset.removed_catalog_object_DEPRECATED ||
+      catalog_update_result.__isset.updated_catalog_objects ||
+      catalog_update_result.__isset.removed_catalog_objects) {
     TUpdateCatalogCacheRequest update_req;
     update_req.__set_is_delta(true);
     update_req.__set_catalog_service_id(catalog_update_result.catalog_service_id);
 
-    if (catalog_update_result.__isset.updated_catalog_object) {
-      update_req.updated_objects.push_back(catalog_update_result.updated_catalog_object);
+    // Check that the response either exclusively uses the single updated/removed field
+    // or the corresponding list versions of the fields, but not a mix.
+    // The non-list version of the fields are maintained for backwards compatibility,
+    // e.g., BDR relies on a stable catalog API.
+    if ((catalog_update_result.__isset.updated_catalog_object_DEPRECATED ||
+         catalog_update_result.__isset.removed_catalog_object_DEPRECATED)
+        &&
+        (catalog_update_result.__isset.updated_catalog_objects ||
+         catalog_update_result.__isset.removed_catalog_objects)) {
+      stringstream err;
+      err << "Failed to process malformed catalog update response:\n"
+          << "__isset.updated_catalog_object_DEPRECATED="
+          << catalog_update_result.__isset.updated_catalog_object_DEPRECATED << "\n"
+          << "__isset.removed_catalog_object_DEPRECATED="
+          << catalog_update_result.__isset.updated_catalog_object_DEPRECATED << "\n"
+          << "__isset.updated_catalog_objects="
+          << catalog_update_result.__isset.updated_catalog_objects << "\n"
+          << "__isset.removed_catalog_objects="
+          << catalog_update_result.__isset.removed_catalog_objects;
+      return Status(TErrorCode::INTERNAL_ERROR, err.str());
     }
-    if (catalog_update_result.__isset.removed_catalog_object) {
-      update_req.removed_objects.push_back(catalog_update_result.removed_catalog_object);
+
+    if (catalog_update_result.__isset.updated_catalog_object_DEPRECATED) {
+      update_req.updated_objects.push_back(
+          catalog_update_result.updated_catalog_object_DEPRECATED);
     }
+    if (catalog_update_result.__isset.removed_catalog_object_DEPRECATED) {
+      update_req.removed_objects.push_back(
+          catalog_update_result.removed_catalog_object_DEPRECATED);
+    }
+    if (catalog_update_result.__isset.updated_catalog_objects) {
+      update_req.__set_updated_objects(catalog_update_result.updated_catalog_objects);
+    }
+    if (catalog_update_result.__isset.removed_catalog_objects) {
+      update_req.__set_removed_objects(catalog_update_result.removed_catalog_objects);
+    }
+
      // Apply the changes to the local catalog cache.
     TUpdateCatalogCacheResponse resp;
     Status status = exec_env_->frontend()->UpdateCatalogCache(update_req, &resp);
@@ -1904,6 +1981,16 @@ void ImpalaServer::DetectNmFailures() {
     SleepForMs(2000);
   }
   freeaddrinfo(addr);
+}
+
+void ImpalaServer::UpdateFilter(TUpdateFilterResult& result,
+    const TUpdateFilterParams& params) {
+  shared_ptr<QueryExecState> query_exec_state = GetQueryExecState(params.query_id, false);
+  if (query_exec_state.get() == NULL) {
+    LOG(INFO) << "Could not find query exec state: " << params.query_id;
+    return;
+  }
+  query_exec_state->coord()->UpdateFilter(params);
 }
 
 }

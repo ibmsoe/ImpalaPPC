@@ -58,34 +58,36 @@ const int64_t DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
 QuerySchedule::QuerySchedule(const TUniqueId& query_id,
     const TQueryExecRequest& request, const TQueryOptions& query_options,
-    const string& effective_user, RuntimeProfile* summary_profile,
-    RuntimeProfile::EventSequence* query_events)
+    RuntimeProfile* summary_profile, RuntimeProfile::EventSequence* query_events)
   : query_id_(query_id),
     request_(request),
     query_options_(query_options),
-    effective_user_(effective_user),
     summary_profile_(summary_profile),
     query_events_(query_events),
-    num_backends_(0),
-    num_hosts_(0),
+    num_fragment_instances_(0),
     num_scan_ranges_(0),
     is_admitted_(false) {
   fragment_exec_params_.resize(request.fragments.size());
-  // map from plan node id to fragment index in exec_request.fragments
-  vector<PlanNodeId> per_node_fragment_idx;
+  // Build two maps to map node ids to their fragments as well as to the offset in their
+  // fragment's plan's nodes list.
   for (int i = 0; i < request.fragments.size(); ++i) {
+    int node_idx = 0;
     BOOST_FOREACH(const TPlanNode& node, request.fragments[i].plan.nodes) {
       if (plan_node_to_fragment_idx_.size() < node.node_id + 1) {
         plan_node_to_fragment_idx_.resize(node.node_id + 1);
+        plan_node_to_plan_node_idx_.resize(node.node_id + 1);
       }
+      DCHECK_EQ(plan_node_to_fragment_idx_.size(), plan_node_to_plan_node_idx_.size());
       plan_node_to_fragment_idx_[node.node_id] = i;
+      plan_node_to_plan_node_idx_[node.node_id] = node_idx;
+      ++node_idx;
     }
   }
 }
 
 int64_t QuerySchedule::GetClusterMemoryEstimate() const {
-  DCHECK_GT(num_hosts_, 0);
-  const int64_t total_cluster_mem = GetPerHostMemoryEstimate() * num_hosts_;
+  DCHECK_GT(unique_hosts_.size(), 0);
+  const int64_t total_cluster_mem = GetPerHostMemoryEstimate() * unique_hosts_.size();
   DCHECK_GE(total_cluster_mem, 0); // Assume total cluster memory fits in an int64_t.
   return total_cluster_mem;
 }

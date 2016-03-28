@@ -14,12 +14,15 @@
 
 #include <algorithm>
 #include <cstring>
-#include <vector>
 #include <boost/assign/list_of.hpp>
+#include <boost/date_time/gregorian/gregorian.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
 #include <gtest/gtest.h>
 
 #include "common/init.h"
-#include "runtime/raw-value.h"
+#include "common/status.h"
+#include "runtime/raw-value.inline.h"
+#include "runtime/timestamp-parse-util.h"
 #include "runtime/timestamp-value.h"
 #include "util/string-parser.h"
 
@@ -416,8 +419,6 @@ TEST(TimestampTest, Basic) {
   }
   // Test parsing/formatting of complex date/time formats
   vector<TimestampTC> test_cases = boost::assign::list_of
-    // Test tiny date/time
-    (TimestampTC("Myyd", "4139", true, true, false, 2013, 4, 9))
     // Test case on literal short months
     (TimestampTC("yyyy-MMM-dd", "2013-OCT-01", false, true, false, 2013, 10, 1))
     // Test case on literal short months
@@ -430,6 +431,8 @@ TEST(TimestampTest, Basic) {
     (TimestampTC("yyyy MM dd ddMMMyyyy (HH:mm:ss.SSSS)",
         "2013 05 12 16Apr1952 (16:53:21.1234)", false, true, true, 1952, 4, 16, 16,
         53, 21, 123400000))
+    // Test missing separator on short date format
+    (TimestampTC("Myyd", "4139", true, true))
     // Test bad year format
     (TimestampTC("YYYYmmdd", "20131001"))
     // Test unknown formatting character
@@ -454,14 +457,40 @@ TEST(TimestampTest, Basic) {
     (TimestampTC("HH:mm:ss", "23:60:01", false, true))
     // Test out of range second
     (TimestampTC("HH:mm:ss", "23:01:60", false, true))
-    // Test characters were numbers should be
+    // Test characters where numbers should be
     (TimestampTC("HH:mm:ss", "aa:01:01", false, true))
     // Test missing year
     (TimestampTC("MMdd", "1201", false, true))
     // Test missing month
     (TimestampTC("yyyydd", "201301", false, true))
     // Test missing month
-    (TimestampTC("yyyymm", "201301", false, true));
+    (TimestampTC("yyyymm", "201301", false, true))
+    // Test short year token
+    (TimestampTC("y-MM-dd", "2013-11-13", false, true, false, 2013, 11, 13))
+    (TimestampTC("y-MM-dd", "13-11-13", false, true, false, 2013, 11, 13))
+    // Test short month token
+    (TimestampTC("yyyy-M-dd", "2013-11-13", false, true, false, 2013, 11, 13))
+    (TimestampTC("yyyy-M-dd", "2013-1-13", false, true, false, 2013, 1, 13))
+    // Test short day token
+    (TimestampTC("yyyy-MM-d", "2013-11-13", false, true, false, 2013, 11, 13))
+    (TimestampTC("yyyy-MM-d", "2013-11-3", false, true, false, 2013, 11, 3))
+    // Test short all date tokens
+    (TimestampTC("y-M-d", "2013-11-13", false, true, false, 2013, 11, 13))
+    (TimestampTC("y-M-d", "13-1-3", false, true, false, 2013, 1, 3))
+    // Test short hour token
+    (TimestampTC("H:mm:ss", "14:24:34", false, false, true, 0, 0, 0, 14, 24, 34))
+    (TimestampTC("H:mm:ss", "4:24:34", false, false, true, 0, 0, 0, 4, 24, 34))
+    // Test short minute token
+    (TimestampTC("HH:m:ss", "14:24:34", false, false, true, 0, 0, 0, 14, 24, 34))
+    (TimestampTC("HH:m:ss", "1:24:34", false, true))
+    // Test short second token
+    (TimestampTC("HH:mm:s", "14:24:34", false, false, true, 0, 0, 0, 14, 24, 34))
+    // Test short all time tokens
+    (TimestampTC("H:m:s", "11:22:33", false, false, true, 0, 0, 0, 11, 22, 33))
+    (TimestampTC("H:m:s", "1:2:3", false, false, true, 0, 0, 0, 1, 2, 3))
+    // Test short fraction token
+    (TimestampTC("HH:mm:ss:S", "14:24:34:1234", false, false, true, 0, 0, 0, 14, 24, 34,
+        123400000));
   // Loop through custom parse/format test cases and execute each one. Each test case
   // will be explicitly set with a pass/fail expectation related to either the format
   // or literal value.
@@ -559,7 +588,9 @@ TEST(TimestampTest, Basic) {
   TimestampValue min_date = TimestampValue("1400-01-01", 10);
   EXPECT_TRUE(min_date.HasDate());
   EXPECT_TRUE(min_date.HasTime());
-  EXPECT_EQ(-17987443200, min_date.ToUnixTime());
+  time_t tm_min;
+  EXPECT_TRUE(min_date.ToUnixTime(&tm_min));
+  EXPECT_EQ(-17987443200, tm_min);
   EXPECT_EQ("1400-01-01 00:00:00", TimestampValue(-17987443200).DebugString());
   TimestampValue too_early(-17987443201);
   EXPECT_FALSE(too_early.HasDate());
@@ -571,7 +602,9 @@ TEST(TimestampTest, Basic) {
       TimestampValue(date(10000, Dec, 31), time_duration(23, 59, 59));
   EXPECT_TRUE(max_date.HasDate());
   EXPECT_TRUE(max_date.HasTime());
-  EXPECT_EQ(253433923199, max_date.ToUnixTime());
+  time_t tm_max;
+  EXPECT_TRUE(max_date.ToUnixTime(&tm_max));
+  EXPECT_EQ(253433923199, tm_max);
   EXPECT_EQ("10000-12-31 23:59:59", TimestampValue(253433923199).DebugString());
   TimestampValue too_late(253433923200);
   EXPECT_FALSE(too_late.HasDate());
@@ -582,8 +615,9 @@ TEST(TimestampTest, Basic) {
   EXPECT_EQ("2038-01-19 03:14:09", TimestampValue(2147483649).DebugString());
 
   // Test Unix time as a float
-  EXPECT_EQ(1382337792.07,
-      TimestampValue("2013-10-21 06:43:12.07", 22).ToSubsecondUnixTime());
+  double result;
+  EXPECT_TRUE(TimestampValue("2013-10-21 06:43:12.07", 22).ToSubsecondUnixTime(&result));
+  EXPECT_EQ(1382337792.07, result);
   EXPECT_EQ("1970-01-01 00:00:00.008000000", TimestampValue(0.008).DebugString());
 }
 

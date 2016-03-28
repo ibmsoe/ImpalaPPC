@@ -69,8 +69,8 @@ AggregationNode::AggregationNode(ObjectPool* pool, const TPlanNode& tnode,
     hash_table_buckets_counter_(NULL) {
 }
 
-Status AggregationNode::Init(const TPlanNode& tnode) {
-  RETURN_IF_ERROR(ExecNode::Init(tnode));
+Status AggregationNode::Init(const TPlanNode& tnode, RuntimeState* state) {
+  RETURN_IF_ERROR(ExecNode::Init(tnode, state));
   RETURN_IF_ERROR(
       Expr::CreateExprTrees(pool_, tnode.agg_node.grouping_exprs, &probe_expr_ctxs_));
   for (int i = 0; i < tnode.agg_node.aggregate_functions.size(); ++i) {
@@ -129,13 +129,6 @@ Status AggregationNode::Prepare(RuntimeState* state) {
   agg_fn_ctxs_.resize(aggregate_evaluators_.size());
   int j = probe_expr_ctxs_.size();
   for (int i = 0; i < aggregate_evaluators_.size(); ++i, ++j) {
-    // skip non-materialized slots; we don't have evaluators instantiated for those
-    while (!intermediate_tuple_desc_->slots()[j]->is_materialized()) {
-      DCHECK_LT(j, intermediate_tuple_desc_->slots().size() - 1)
-          << "#eval= " << aggregate_evaluators_.size()
-          << " #probe=" << probe_expr_ctxs_.size();
-      ++j;
-    }
     SlotDescriptor* intermediate_slot_desc = intermediate_tuple_desc_->slots()[j];
     SlotDescriptor* output_slot_desc = output_tuple_desc_->slots()[j];
     RETURN_IF_ERROR(aggregate_evaluators_[i]->Prepare(state, child(0)->row_desc(),
@@ -144,8 +137,9 @@ Status AggregationNode::Prepare(RuntimeState* state) {
   }
 
   // TODO: how many buckets?
-  hash_tbl_.reset(new OldHashTable(state, build_expr_ctxs_, probe_expr_ctxs_, 1,
-                                   true, true, id(), mem_tracker(), true));
+  hash_tbl_.reset(new OldHashTable(state, build_expr_ctxs_, probe_expr_ctxs_,
+      vector<ExprContext*>(), 1, true,  vector<bool>(build_expr_ctxs_.size(), true), id(),
+      mem_tracker(), vector<RuntimeFilter*>(), true));
 
   if (probe_expr_ctxs_.empty()) {
     // create single intermediate tuple now; we need to output something
@@ -157,6 +151,7 @@ Status AggregationNode::Prepare(RuntimeState* state) {
     output_iterator_ = hash_tbl_->Begin();
   }
 
+  bool codegen_enabled = false;
   if (state->codegen_enabled()) {
     LlvmCodeGen* codegen;
     RETURN_IF_ERROR(state->GetCodegen(&codegen));
@@ -168,10 +163,11 @@ Status AggregationNode::Prepare(RuntimeState* state) {
         // Update to using codegen'd process row batch.
         codegen->AddFunctionToJit(codegen_process_row_batch_fn_,
             reinterpret_cast<void**>(&process_row_batch_fn_));
-        AddRuntimeExecOption("Codegen Enabled");
+        codegen_enabled = true;
       }
     }
   }
+  AddCodegenExecOption(codegen_enabled);
   return Status::OK();
 }
 
@@ -334,7 +330,6 @@ Tuple* AggregationNode::ConstructIntermediateTuple() {
 
   // Initialize aggregate output.
   for (int i = 0; i < aggregate_evaluators_.size(); ++i, ++slot_desc) {
-    while (!(*slot_desc)->is_materialized()) ++slot_desc;
     AggFnEvaluator* evaluator = aggregate_evaluators_[i];
     evaluator->Init(agg_fn_ctxs_[i], intermediate_tuple);
     // Codegen specific path.
@@ -511,7 +506,6 @@ IRFunction::Type GetHllUpdateFunction2(const ColumnType& type) {
 // }
 llvm::Function* AggregationNode::CodegenUpdateSlot(
     RuntimeState* state, AggFnEvaluator* evaluator, SlotDescriptor* slot_desc) {
-  DCHECK(slot_desc->is_materialized());
   LlvmCodeGen* codegen;
   if (!state->GetCodegen(&codegen).ok()) return NULL;
 
@@ -530,7 +524,7 @@ llvm::Function* AggregationNode::CodegenUpdateSlot(
 
   PointerType* fn_ctx_type =
       codegen->GetPtrType(FunctionContextImpl::LLVM_FUNCTIONCONTEXT_NAME);
-  StructType* tuple_struct = intermediate_tuple_desc_->GenerateLlvmStruct(codegen);
+  StructType* tuple_struct = intermediate_tuple_desc_->GetLlvmStruct(codegen);
   PointerType* tuple_ptr_type = PointerType::get(tuple_struct, 0);
   PointerType* tuple_row_ptr_type = codegen->GetPtrType(TupleRow::LLVM_CLASS_NAME);
 
@@ -569,7 +563,7 @@ llvm::Function* AggregationNode::CodegenUpdateSlot(
 
   if (slot_desc->is_nullable()) {
     // Dst is NULL, just update dst slot to src slot and clear null bit
-    Function* clear_null_fn = slot_desc->CodegenUpdateNull(codegen, tuple_struct, false);
+    Function* clear_null_fn = slot_desc->GetUpdateNullFn(codegen, false);
     builder.CreateCall(clear_null_fn, agg_tuple_arg);
   }
 
@@ -607,7 +601,7 @@ llvm::Function* AggregationNode::CodegenUpdateSlot(
       DCHECK_EQ(slot_desc->type().type, TYPE_STRING);
       IRFunction::Type ir_function_type = evaluator->is_merge() ? IRFunction::HLL_MERGE
                                           : GetHllUpdateFunction2(input_expr->type());
-      Function* hll_fn = codegen->GetFunction(ir_function_type);
+      Function* hll_fn = codegen->GetFunction(ir_function_type, false);
 
       // Create pointer to src_anyval to pass to HllUpdate() function. We must use the
       // unlowered type.
@@ -688,11 +682,6 @@ Function* AggregationNode::CodegenUpdateTuple(RuntimeState* state) {
 
   int j = probe_expr_ctxs_.size();
   for (int i = 0; i < aggregate_evaluators_.size(); ++i, ++j) {
-    // skip non-materialized slots; we don't have evaluators instantiated for those
-    while (!intermediate_tuple_desc_->slots()[j]->is_materialized()) {
-      DCHECK_LT(j, intermediate_tuple_desc_->slots().size() - 1);
-      ++j;
-    }
     SlotDescriptor* slot_desc = intermediate_tuple_desc_->slots()[j];
     AggFnEvaluator* evaluator = aggregate_evaluators_[i];
 
@@ -713,7 +702,7 @@ Function* AggregationNode::CodegenUpdateTuple(RuntimeState* state) {
     if (!evaluator->is_builtin()) return NULL;
   }
 
-  if (intermediate_tuple_desc_->GenerateLlvmStruct(codegen) == NULL) {
+  if (intermediate_tuple_desc_->GetLlvmStruct(codegen) == NULL) {
     VLOG_QUERY << "Could not codegen UpdateTuple because we could"
                << "not generate a matching llvm struct for the intermediate tuple.";
     return NULL;
@@ -735,7 +724,7 @@ Function* AggregationNode::CodegenUpdateTuple(RuntimeState* state) {
   // Signature for UpdateTuple is
   // void UpdateTuple(AggregationNode* this, Tuple* tuple, TupleRow* row)
   // This signature needs to match the non-codegen'd signature exactly.
-  StructType* tuple_struct = intermediate_tuple_desc_->GenerateLlvmStruct(codegen);
+  StructType* tuple_struct = intermediate_tuple_desc_->GetLlvmStruct(codegen);
   PointerType* tuple_ptr = PointerType::get(tuple_struct, 0);
   LlvmCodeGen::FnPrototype prototype(codegen, "UpdateTuple", codegen->void_type());
   prototype.AddArgument(LlvmCodeGen::NamedVariable("this_ptr", agg_node_ptr_type));
@@ -754,11 +743,6 @@ Function* AggregationNode::CodegenUpdateTuple(RuntimeState* state) {
   // count(*), generate a helper IR function to update the slot and call that.
   j = probe_expr_ctxs_.size();
   for (int i = 0; i < aggregate_evaluators_.size(); ++i, ++j) {
-    // skip non-materialized slots; we don't have evaluators instantiated for those
-    while (!intermediate_tuple_desc_->slots()[j]->is_materialized()) {
-      DCHECK_LT(j, intermediate_tuple_desc_->slots().size() - 1);
-      ++j;
-    }
     SlotDescriptor* slot_desc = intermediate_tuple_desc_->slots()[j];
     AggFnEvaluator* evaluator = aggregate_evaluators_[i];
     if (evaluator->is_count_star()) {
@@ -796,14 +780,14 @@ Function* AggregationNode::CodegenProcessRowBatch(
   IRFunction::Type ir_fn = (!probe_expr_ctxs_.empty() ?
       IRFunction::AGG_NODE_PROCESS_ROW_BATCH_WITH_GROUPING :
       IRFunction::AGG_NODE_PROCESS_ROW_BATCH_NO_GROUPING);
-  Function* process_batch_fn = codegen->GetFunction(ir_fn);
+  Function* process_batch_fn = codegen->GetFunction(ir_fn, true);
 
   if (process_batch_fn == NULL) {
     LOG(ERROR) << "Could not find AggregationNode::ProcessRowBatch in module.";
     return NULL;
   }
 
-  int replaced = 0;
+  int replaced;
   if (!probe_expr_ctxs_.empty()) {
     // Aggregation w/o grouping does not use a hash table.
 
@@ -824,27 +808,24 @@ Function* AggregationNode::CodegenProcessRowBatch(
     if (eval_probe_row_fn == NULL) return NULL;
 
     // Replace call sites
-    process_batch_fn = codegen->ReplaceCallSites(process_batch_fn, false,
-        eval_build_row_fn, "EvalBuildRow", &replaced);
+    replaced =
+        codegen->ReplaceCallSites(process_batch_fn, eval_build_row_fn, "EvalBuildRow");
     DCHECK_EQ(replaced, 1);
 
-    process_batch_fn = codegen->ReplaceCallSites(process_batch_fn, false,
-        eval_probe_row_fn, "EvalProbeRow", &replaced);
+    replaced =
+        codegen->ReplaceCallSites(process_batch_fn, eval_probe_row_fn, "EvalProbeRow");
     DCHECK_EQ(replaced, 1);
 
-    process_batch_fn = codegen->ReplaceCallSites(process_batch_fn, false,
-        hash_fn, "HashCurrentRow", &replaced);
+    replaced = codegen->ReplaceCallSites(process_batch_fn, hash_fn, "HashCurrentRow");
     DCHECK_EQ(replaced, 2);
 
-    process_batch_fn = codegen->ReplaceCallSites(process_batch_fn, false,
-        equals_fn, "Equals", &replaced);
+    replaced = codegen->ReplaceCallSites(process_batch_fn, equals_fn, "Equals");
     DCHECK_EQ(replaced, 1);
   }
 
-  process_batch_fn = codegen->ReplaceCallSites(process_batch_fn, false,
-      update_tuple_fn, "UpdateTuple", &replaced);
-  DCHECK_EQ(replaced, 1) << "One call site should be replaced.";
-  DCHECK(process_batch_fn != NULL);
+  replaced = codegen->ReplaceCallSites(process_batch_fn, update_tuple_fn, "UpdateTuple");
+  DCHECK_EQ(replaced, 1);
+
   return codegen->OptimizeFunctionWithExprs(process_batch_fn);
 }
 

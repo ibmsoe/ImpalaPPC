@@ -24,10 +24,12 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.hadoop.hive.metastore.MetaStoreUtils;
 import org.junit.Test;
 
 import com.cloudera.impala.analysis.TimestampArithmeticExpr.TimeUnit;
 import com.cloudera.impala.common.AnalysisException;
+import com.cloudera.impala.testutil.TestUtils;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
@@ -87,7 +89,10 @@ public class ParserTest {
     } catch (Exception e) {
       if (expectedErrorString != null) {
         String errorString = parser.getErrorMsg(stmt);
-        assertTrue(errorString.startsWith(expectedErrorString));
+        StringBuilder message = new StringBuilder();
+        message.append("Got: ");
+        message.append(errorString).append("\nExpected: ").append(expectedErrorString);
+        assertTrue(message.toString(), errorString.startsWith(expectedErrorString));
       }
       return;
     }
@@ -231,6 +236,7 @@ public class ParserTest {
     ParsesOk("select 1--");
     ParsesOk("select 1 --foo");
     ParsesOk("select 1 --\ncol_name");
+    ParsesOk("--foo's \nselect 1 --bar");
     ParsesOk("--foo\nselect 1 --bar");
     ParsesOk("--foo\r\nselect 1 --bar");
     ParsesOk("--/* foo */\n select 1");
@@ -255,7 +261,33 @@ public class ParserTest {
       List<String> hints = selectStmt.getTableRefs().get(i).getJoinHints();
       if (hints != null) actualHints.addAll(hints);
     }
-    if (actualHints.isEmpty()) actualHints = Lists.<String>newArrayList((String) null);
+    if (actualHints.isEmpty()) actualHints = Lists.newArrayList((String) null);
+    assertEquals(Lists.newArrayList(expectedHints), actualHints);
+  }
+
+  private void TestTableHints(String stmt, String... expectedHints) {
+    SelectStmt selectStmt = (SelectStmt) ParsesOk(stmt);
+    Preconditions.checkState(selectStmt.getTableRefs().size() > 0);
+    List<String> actualHints = Lists.newArrayList();
+    for (int i = 0; i < selectStmt.getTableRefs().size(); ++i) {
+      List<String> hints = selectStmt.getTableRefs().get(i).getTableHints();
+      if (hints != null) actualHints.addAll(hints);
+    }
+    if (actualHints.isEmpty()) actualHints = Lists.newArrayList((String) null);
+    assertEquals(Lists.newArrayList(expectedHints), actualHints);
+  }
+
+  private void TestTableAndJoinHints(String stmt, String... expectedHints) {
+    SelectStmt selectStmt = (SelectStmt) ParsesOk(stmt);
+    Preconditions.checkState(selectStmt.getTableRefs().size() > 0);
+    List<String> actualHints = Lists.newArrayList();
+    for (int i = 0; i < selectStmt.getTableRefs().size(); ++i) {
+      List<String> joinHints = selectStmt.getTableRefs().get(i).getJoinHints();
+      if (joinHints != null) actualHints.addAll(joinHints);
+      List<String> tableHints = selectStmt.getTableRefs().get(i).getTableHints();
+      if (tableHints != null) actualHints.addAll(tableHints);
+    }
+    if (actualHints.isEmpty()) actualHints = Lists.newArrayList((String) null);
     assertEquals(Lists.newArrayList(expectedHints), actualHints);
   }
 
@@ -266,7 +298,7 @@ public class ParserTest {
   private void TestSelectListHints(String stmt, String... expectedHints) {
     SelectStmt selectStmt = (SelectStmt) ParsesOk(stmt);
     List<String> actualHints = selectStmt.getSelectList().getPlanHints();
-    if (actualHints == null) actualHints = Lists.<String>newArrayList((String) null);
+    if (actualHints == null) actualHints = Lists.newArrayList((String) null);
     assertEquals(Lists.newArrayList(expectedHints), actualHints);
   }
 
@@ -276,7 +308,7 @@ public class ParserTest {
   private void TestInsertHints(String stmt, String... expectedHints) {
     InsertStmt insertStmt = (InsertStmt) ParsesOk(stmt);
     List<String> actualHints = insertStmt.getPlanHints();
-    if (actualHints == null) actualHints = Lists.<String>newArrayList((String) null);
+    if (actualHints == null) actualHints = Lists.newArrayList((String) null);
     assertEquals(Lists.newArrayList(expectedHints), actualHints);
   }
 
@@ -357,6 +389,28 @@ public class ParserTest {
       TestInsertHints(String.format(
           "insert overwrite t(a, b) partition(x, y) %sfoo,bar,baz%s select * from t",
           prefix, suffix), "foo", "bar", "baz");
+
+      // Test TableRef hints.
+      TestTableHints(String.format(
+          "select * from functional.alltypes %sschedule_disk_local%s", prefix, suffix),
+          "schedule_disk_local");
+      TestTableHints(String.format(
+          "select * from functional.alltypes %sschedule_cache_local,random_replica%s",
+          prefix, suffix), "schedule_cache_local", "random_replica");
+      TestTableHints(String.format(
+          "select * from functional.alltypes a %sschedule_cache_local,random_replica%s",
+          prefix, suffix), "schedule_cache_local", "random_replica");
+      TestTableHints(String.format(
+          "select * from functional.alltypes a %sschedule_cache_local,random_replica%s" +
+          ", functional.alltypes b %sschedule_remote%s", prefix, suffix,
+          prefix, suffix), "schedule_cache_local", "random_replica", "schedule_remote");
+
+      // Test both TableRef and join hints.
+      TestTableAndJoinHints(String.format(
+          "select * from functional.alltypes a %sschedule_cache_local,random_replica%s" +
+          "join %sbroadcast%s functional.alltypes b %sschedule_remote%s using(id)",
+          prefix, suffix, prefix, suffix, prefix, suffix), "schedule_cache_local",
+          "random_replica", "broadcast", "schedule_remote");
 
       // Test select-list hints (e.g., straight_join). The legacy-style hint has no
       // prefix and suffix.
@@ -1277,8 +1331,10 @@ public class ParserTest {
       operations.add(op.toString());
     }
     operations.add("like");
+    operations.add("ilike");
     operations.add("rlike");
     operations.add("regexp");
+    operations.add("iregexp");
 
     for (String lop: operands_) {
       for (String rop: operands_) {
@@ -1542,6 +1598,49 @@ public class ParserTest {
         "select a from src where b > 5");
     ParserError("insert into table t partition [shuffle] (pk1=10 pk2=20) " +
         "select a from src where b > 5");
+
+    ParsesOk("insert ignore into table t values (1,2,3)");
+  }
+
+  @Test
+  public void TestUpdate() {
+    ParsesOk("update t set x = 3 where a < b");
+    ParsesOk("update t set x = (3 + length(\"hallo\")) where a < 'adasas'");
+    ParsesOk("update t set x = 3");
+    ParsesOk("update t set x=3, x=4 from a.b t where b = 10");
+    ParsesOk("update ignore t set x = 3");
+    ParsesOk("update ignore t set x=3, x=4 from a.b t where b = 10");
+    ParserError("update t");
+    ParserError("update t set x < 3");
+    ParserError("update t set x");
+    ParserError("update t set 4 = x");
+    ParserError("update from t set x = 3");
+    ParserError("update t where x = 4");
+    ParserError("update t a set a = 10  where x = 4");
+    ParserError("update t a from t b where set a = 10 x = 4");
+  }
+
+  @Test
+  public void TestKuduUpdate() {
+    TestUtils.assumeKuduIsSupported();
+    ParserError("update (select * from functional_kudu.testtbl) a set name = '10'");
+  }
+
+  @Test
+  public void TestDelete() {
+    ParsesOk("delete from t");
+    ParsesOk("delete ignore from t");
+    ParsesOk("delete a from t a");
+    ParsesOk("delete a from t a join b on a.id = b.id where true");
+    ParsesOk("delete a from t a join b where true");
+    ParsesOk("delete ignore a from t a join b where true");
+    ParsesOk("delete t from t");
+    ParsesOk("delete t from t where a < b");
+    ParsesOk("delete a from t a where a < b");
+    ParsesOk("delete FROM t where a < b");
+    ParsesOk("delete t where a < b");
+    ParsesOk("delete t");
+    ParserError("delete t join f on t.id = f.id");
   }
 
   @Test
@@ -1714,6 +1813,10 @@ public class ParserTest {
         "'f.jar' SYMBOL='class.Udf' COMMENT='hi'");
     ParsesOk("CREATE FUNCTION IF NOT EXISTS Foo() RETURNS INT LOCATION 'foo.jar' " +
         "SYMBOL='class.Udf'");
+    ParsesOk("CREATE FUNCTION foo LOCATION 'f.jar' SYMBOL='class.Udf'");
+    ParsesOk("CREATE FUNCTION db.foo LOCATION 'f.jar' SYMBOL='class.Udf'");
+    ParsesOk("CREATE FUNCTION IF NOT EXISTS foo LOCATION 'f.jar' SYMBOL='class.Udf'");
+    ParsesOk("CREATE FUNCTION IF NOT EXISTS db.foo LOCATION 'f.jar' SYMBOL='class.Udf'");
 
     // Try more interesting function names
     ParsesOk("CREATE FUNCTION User.Foo() RETURNS INT LOCATION 'a'");
@@ -1725,6 +1828,7 @@ public class ParserTest {
     ParserError("CREATE FUNCTION User.() RETURNS INT LOCATION 'a'");
     ParserError("CREATE FUNCTION User.Foo.() RETURNS INT LOCATION 'a'");
     ParserError("CREATE FUNCTION User..Foo() RETURNS INT LOCATION 'a'");
+    ParserError("CREATE FUNCTION Foo() LOCATION 'a.jar' SYMBOL='class.Udf");
     // Bad function name that parses but won't analyze.
     ParsesOk("CREATE FUNCTION A.B.C.D.Foo() RETURNS INT LOCATION 'a'");
 
@@ -1738,6 +1842,8 @@ public class ParserTest {
     ParserError("CREATE FUNCTION Foo() RETURNS INT SYMBOL='1' LOCATION 'a'");
     ParserError("CREATE FUNCTION Foo() RETURNS INT LOCATION 'a' SYMBOL");
     ParserError("CREATE FUNCTION Foo() RETURNS INT LOCATION 'a' SYMBOL='1' SYMBOL='2'");
+    ParserError("CREATE FUNCTION IF NOT EXISTS db.foo LOCATION 'f.jar' SYMBOL='1'" +
+         " SYMBOL='2'");
 
     // Missing arguments
     ParserError("CREATE FUNCTION Foo RETURNS INT LOCATION 'f.jar'");
@@ -2187,7 +2293,7 @@ public class ParserTest {
         " WITH REPLICATION = 4");
     ParsesOk("CREATE TABLE Foo (i int) PARTITIONED BY(j int) CACHED IN 'myPool'");
     ParsesOk("CREATE TABLE Foo (i int) PARTITIONED BY(j int) LOCATION '/a' " +
-          "CACHED IN 'myPool'");
+        "CACHED IN 'myPool'");
     ParserError("CREATE TABLE Foo (i int) CACHED IN myPool");
     ParserError("CREATE TABLE Foo (i int) PARTITIONED BY(j int) CACHED IN");
     ParserError("CREATE TABLE Foo (i int) CACHED 'myPool'");
@@ -2232,6 +2338,40 @@ public class ParserTest {
         "ROW FORMAT DELIMITED");
     ParserError("CREATE TABLE Foo (i int) PARTITIONED BY (j string) PRODUCED BY DATA " +
         "SOURCE Foo(\"\")");
+
+
+    // Flexible partitioning
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY HASH(i) INTO 4 BUCKETS");
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY HASH(i) INTO 4 BUCKETS, " +
+        "HASH(a) INTO 2 BUCKETS");
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY HASH INTO 4 BUCKETS");
+    ParsesOk("CREATE TABLE Foo (i int, k int) DISTRIBUTE BY HASH INTO 4 BUCKETS," +
+        " HASH(k) INTO 4 BUCKETS");
+    ParserError("CREATE TABLE Foo (i int) DISTRIBUTE BY HASH(i)");
+
+    // Range partitioning, the split rows are not validated in the parser
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY RANGE(i) " +
+        "SPLIT ROWS ((1, 2.0, 'asdas'))");
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY RANGE " +
+        "SPLIT ROWS ((1, 2.0, 'asdas'))");
+
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY RANGE(i) " +
+            "SPLIT ROWS (('asdas'))");
+
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY RANGE(i) " +
+        "SPLIT ROWS ((1, 2.0, 'asdas'), (2,3.0, 'adas'))");
+
+    ParserError("CREATE TABLE Foo (i int) DISTRIBUTE BY RANGE(i) " +
+        "SPLIT ROWS ()");
+    ParserError("CREATE TABLE Foo (i int) DISTRIBUTE BY RANGE(i)");
+
+    // Combine both
+    ParsesOk("CREATE TABLE Foo (i int) DISTRIBUTE BY HASH(i) INTO 4 BUCKETS, RANGE(i) " +
+        "SPLIT ROWS ((1, 2.0, 'asdas'))");
+
+    // Can only have one range clause
+    ParserError("CREATE TABLE Foo (i int) DISTRIBUTE BY HASH(i) INTO 4 BUCKETS, RANGE(i) " +
+        "SPLIT ROWS ((1, 2.0, 'asdas')), RANGE(i) SPLIT ROWS ((1, 2.0, 'asdas'))");
   }
 
   @Test
@@ -2383,6 +2523,21 @@ public class ParserTest {
     // Column and partition definitions not allowed
     ParserError("CREATE TABLE Foo(i int) AS SELECT 1");
     ParserError("CREATE TABLE Foo PARTITIONED BY(i int) AS SELECT 1");
+
+    // Partitioned by syntax following insert into syntax
+    ParsesOk("CREATE TABLE Foo PARTITIONED BY (a) AS SELECT 1");
+    ParsesOk("CREATE TABLE Foo PARTITIONED BY (a) ROW FORMAT DELIMITED STORED AS " +
+        "PARQUETFILE AS SELECT 1");
+    ParsesOk("CREATE TABLE Foo PARTITIONED BY (a) AS SELECT 1, 2");
+    ParsesOk("CREATE TABLE Foo PARTITIONED BY (a) AS SELECT * from Bar");
+    ParsesOk("CREATE TABLE Foo PARTITIONED BY (a, b) AS SELECT * from Bar");
+    ParserError("CREATE TABLE Foo PARTITIONED BY (a=2, b) AS SELECT * from Bar");
+    ParserError("CREATE TABLE Foo PARTITIONED BY (a, b=2) AS SELECT * from Bar");
+
+    // Flexible partitioning
+    ParsesOk("CREATE TABLE Foo DISTRIBUTE BY HASH(i) INTO 4 BUCKETS AS SELECT 1");
+    ParsesOk("CREATE TABLE Foo DISTRIBUTE BY HASH(a) INTO 4 BUCKETS " +
+        "TBLPROPERTIES ('a'='b', 'c'='d') AS SELECT * from bar");
   }
 
   @Test
@@ -2413,6 +2568,8 @@ public class ParserTest {
     ParsesOk("DROP AGGREGATE FUNCTION IF EXISTS Foo()");
     ParsesOk("DROP FUNCTION IF EXISTS Foo(INT)");
     ParsesOk("DROP FUNCTION IF EXISTS Foo(INT...)");
+    ParsesOk("DROP FUNCTION Foo");
+    ParsesOk("DROP FUNCTION IF EXISTS Foo");
 
     ParserError("DROP");
     ParserError("DROP Foo");
@@ -2438,11 +2595,11 @@ public class ParserTest {
     ParserError("DROP VIEW Foo purge");
     ParserError("DROP FUNCTION Foo)");
     ParserError("DROP FUNCTION Foo(");
-    ParserError("DROP FUNCTION Foo");
     ParserError("DROP FUNCTION Foo PURGE");
     ParserError("DROP FUNCTION");
     ParserError("DROP BLAH FUNCTION");
     ParserError("DROP IF EXISTS FUNCTION Foo()");
+    ParserError("DROP FUNCTION Foo RETURNS INT");
     ParserError("DROP FUNCTION Foo(INT) RETURNS INT");
     ParserError("DROP FUNCTION Foo.(INT) RETURNS INT");
     ParserError("DROP FUNCTION Foo..(INT) RETURNS INT");
@@ -2521,6 +2678,7 @@ public class ParserTest {
     TypeDefsParseOk("DOUBLE", "REAL");
     TypeDefsParseOk("STRING");
     TypeDefsParseOk("CHAR(1)", "CHAR(20)");
+    TypeDefsParseOk("VARCHAR(1)", "VARCHAR(20)");
     TypeDefsParseOk("BINARY");
     TypeDefsParseOk("DECIMAL");
     TypeDefsParseOk("TIMESTAMP");
@@ -2546,6 +2704,16 @@ public class ParserTest {
     TypeDefsParseOk("STRUCT<f:TINYINT>");
     TypeDefsParseOk("STRUCT<a:TINYINT, b:BIGINT, c:DOUBLE>");
     TypeDefsParseOk("STRUCT<a:TINYINT COMMENT 'x', b:BIGINT, c:DOUBLE COMMENT 'y'>");
+
+    // Test that struct-field names can be identifiers or keywords even if unquoted.
+    // This behavior is needed to parse type strings from the Hive Metastore which
+    // may have unquoted identifiers corresponding to keywords.
+    for (String keyword: SqlScanner.keywordMap.keySet()) {
+      // Skip keywords that are not valid field/column names in the Metastore.
+      if (!MetaStoreUtils.validateName(keyword)) continue;
+      String structType = "STRUCT<" + keyword + ":INT>";
+      TypeDefsParseOk(structType);
+    }
 
     TypeDefsError("CHAR()");
     TypeDefsError("CHAR(1, 1)");
@@ -2604,9 +2772,9 @@ public class ParserTest {
         "c, b, c from t\n" +
         "^\n" +
         "Encountered: IDENTIFIER\n" +
-        "Expected: ALTER, COMPUTE, CREATE, DESCRIBE, DROP, EXPLAIN, GRANT, " +
+        "Expected: ALTER, COMPUTE, CREATE, DELETE, DESCRIBE, DROP, EXPLAIN, GRANT, " +
         "INSERT, INVALIDATE, LOAD, REFRESH, REVOKE, SELECT, SET, SHOW, TRUNCATE, " +
-        "USE, VALUES, WITH\n");
+        "UPDATE, USE, VALUES, WITH\n");
 
     // missing select list
     ParserError("select from t",
@@ -2624,7 +2792,7 @@ public class ParserTest {
         "select c, b, c where a = 5\n" +
         "               ^\n" +
         "Encountered: WHERE\n" +
-        "Expected: AND, AS, BETWEEN, DIV, FROM, IN, IS, LIKE, LIMIT, NOT, OR, " +
+        "Expected: AND, AS, BETWEEN, DIV, FROM, ILIKE, IN, IREGEXP, IS, LIKE, LIMIT, NOT, OR, " +
         "ORDER, REGEXP, RLIKE, UNION, COMMA, IDENTIFIER\n");
 
     // missing table list
@@ -2694,7 +2862,7 @@ public class ParserTest {
         "                             ^\n" +
         "Encountered: IDENTIFIER\n" +
         "Expected: CROSS, FROM, FULL, GROUP, HAVING, INNER, JOIN, LEFT, LIMIT, OFFSET, " +
-        "ON, ORDER, RIGHT, UNION, USING, WHERE, COMMA\n");
+        "ON, ORDER, RIGHT, STRAIGHT_JOIN, UNION, USING, WHERE, COMMA\n");
 
     // Long line: error close to the start
     ParserError("select a a a, b, c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,cd,c,d,d,,c, from t",
@@ -2703,7 +2871,7 @@ public class ParserTest {
         "           ^\n" +
         "Encountered: IDENTIFIER\n" +
         "Expected: CROSS, FROM, FULL, GROUP, HAVING, INNER, JOIN, LEFT, LIMIT, OFFSET, " +
-        "ON, ORDER, RIGHT, UNION, USING, WHERE, COMMA\n");
+        "ON, ORDER, RIGHT, STRAIGHT_JOIN, UNION, USING, WHERE, COMMA\n");
 
     // Long line: error close to the end
     ParserError("select a, b, c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,c,cd,c,d,d, ,c, from t",
@@ -2758,7 +2926,8 @@ public class ParserTest {
   public void TestSubqueries() {
     // Binary nested predicates
     String subquery = "(SELECT count(*) FROM bar)";
-    String[] operators = {"=", "!=", "<>", ">", ">=", "<", "<="};
+    String[] operators = {"=", "!=", "<>", ">", ">=", "<", "<=", "<=>",
+      "IS DISTINCT FROM", "IS NOT DISTINCT FROM"};
     for (String op: operators) {
       ParsesOk(String.format("SELECT * FROM foo WHERE a %s %s", op, subquery));
       ParsesOk(String.format("SELECT * FROM foo WHERE %s %s a", subquery, op));

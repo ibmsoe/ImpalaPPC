@@ -23,12 +23,14 @@
 #include <boost/random/ranlux.hpp>
 #include <boost/random/uniform_int.hpp>
 
+#include "codegen/impala-ir.h"
 #include "common/logging.h"
-#include "runtime/decimal-value.h"
+#include "runtime/decimal-value.inline.h"
 #include "runtime/runtime-state.h"
-#include "runtime/string-value.h"
+#include "runtime/string-value.inline.h"
 #include "runtime/timestamp-value.h"
 #include "exprs/anyval-util.h"
+#include "exprs/expr.h"
 #include "exprs/hll-bias.h"
 
 #include "common/names.h"
@@ -127,14 +129,14 @@ namespace impala {
 // 'dst' will be set to a null string. This allows execution to continue until the
 // next time GetQueryStatus() is called (see IMPALA-2756).
 static void AllocBuffer(FunctionContext* ctx, StringVal* dst, size_t buf_len) {
-  DCHECK_GT(buf_len, 0);
   uint8_t* ptr = ctx->Allocate(buf_len);
-  if (UNLIKELY(ptr == NULL)) {
+  if (UNLIKELY(ptr == NULL && buf_len != 0)) {
     DCHECK(!ctx->impl()->state()->GetQueryStatus().ok());
     *dst = StringVal::null();
   } else {
     *dst = StringVal(ptr, buf_len);
-    memset(ptr, 0, buf_len);
+    // Avoid memset() with NULL ptr as it's undefined.
+    if (LIKELY(ptr != NULL)) memset(ptr, 0, buf_len);
   }
 }
 
@@ -142,14 +144,14 @@ static void AllocBuffer(FunctionContext* ctx, StringVal* dst, size_t buf_len) {
 // 'buf_len' bytes and copies the content of StringVal 'src' into it.
 // If allocation fails, 'dst' will be set to a null string.
 static void CopyStringVal(FunctionContext* ctx, const StringVal& src, StringVal* dst) {
-  DCHECK_GT(src.len, 0);
   uint8_t* copy = ctx->Allocate(src.len);
-  if (UNLIKELY(copy == NULL)) {
+  if (UNLIKELY(copy == NULL && src.len != 0)) {
     DCHECK(!ctx->impl()->state()->GetQueryStatus().ok());
     *dst = StringVal::null();
   } else {
     *dst = StringVal(copy, src.len);
-    memcpy(dst->ptr, src.ptr, src.len);
+    // Avoid memcpy() to NULL ptr as it's undefined.
+    if (LIKELY(dst->ptr != NULL)) memcpy(dst->ptr, src.ptr, src.len);
   }
 }
 
@@ -293,9 +295,12 @@ void AggregateFunctions::TimestampAvgUpdate(FunctionContext* ctx,
   DCHECK(dst->ptr != NULL);
   DCHECK_EQ(sizeof(AvgState), dst->len);
   AvgState* avg = reinterpret_cast<AvgState*>(dst->ptr);
-  double val = TimestampValue::FromTimestampVal(src).ToSubsecondUnixTime();
-  avg->sum += val;
-  ++avg->count;
+  TimestampValue tm_src = TimestampValue::FromTimestampVal(src);
+  double val;
+  if (tm_src.ToSubsecondUnixTime(&val)) {
+    avg->sum += val;
+    ++avg->count;
+  }
 }
 
 void AggregateFunctions::TimestampAvgRemove(FunctionContext* ctx,
@@ -304,10 +309,13 @@ void AggregateFunctions::TimestampAvgRemove(FunctionContext* ctx,
   DCHECK(dst->ptr != NULL);
   DCHECK_EQ(sizeof(AvgState), dst->len);
   AvgState* avg = reinterpret_cast<AvgState*>(dst->ptr);
-  double val = TimestampValue::FromTimestampVal(src).ToSubsecondUnixTime();
-  avg->sum -= val;
-  --avg->count;
-  DCHECK_GE(avg->count, 0);
+  TimestampValue tm_src = TimestampValue::FromTimestampVal(src);
+  double val;
+  if (tm_src.ToSubsecondUnixTime(&val)) {
+    avg->sum -= val;
+    --avg->count;
+    DCHECK_GE(avg->count, 0);
+  }
 }
 
 TimestampVal AggregateFunctions::TimestampAvgGetValue(FunctionContext* ctx,
@@ -315,9 +323,13 @@ TimestampVal AggregateFunctions::TimestampAvgGetValue(FunctionContext* ctx,
   AvgState* val_struct = reinterpret_cast<AvgState*>(src.ptr);
   if (val_struct->count == 0) return TimestampVal::null();
   TimestampValue tv(val_struct->sum / val_struct->count);
-  TimestampVal result;
-  tv.ToTimestampVal(&result);
-  return result;
+  if (tv.HasDate()) {
+    TimestampVal result;
+    tv.ToTimestampVal(&result);
+    return result;
+  } else {
+    return TimestampVal::null();
+  }
 }
 
 TimestampVal AggregateFunctions::TimestampAvgFinalize(FunctionContext* ctx,
@@ -347,19 +359,18 @@ void AggregateFunctions::DecimalAvgRemove(FunctionContext* ctx, const DecimalVal
   DecimalAvgAddOrRemove(ctx, src, dst, true);
 }
 
-void AggregateFunctions::DecimalAvgAddOrRemove(FunctionContext* ctx,
+// Always inline in IR so that constants can be replaced.
+IR_ALWAYS_INLINE void AggregateFunctions::DecimalAvgAddOrRemove(FunctionContext* ctx,
     const DecimalVal& src, StringVal* dst, bool remove) {
   if (src.is_null) return;
   DCHECK(dst->ptr != NULL);
   DCHECK_EQ(sizeof(DecimalAvgState), dst->len);
   DecimalAvgState* avg = reinterpret_cast<DecimalAvgState*>(dst->ptr);
-  const FunctionContext::TypeDesc* arg_desc = ctx->GetArgType(0);
-  DCHECK(arg_desc != NULL);
 
   // Since the src and dst are guaranteed to be the same scale, we can just
   // do a simple add.
   int m = remove ? -1 : 1;
-  switch (ColumnType::GetDecimalByteSize(arg_desc->precision)) {
+  switch (Expr::GetConstantInt(*ctx, Expr::ARG_TYPE_SIZE, 0)) {
     case 4:
       avg->sum.val16 += m * src.val4;
       break;
@@ -407,7 +418,7 @@ DecimalVal AggregateFunctions::DecimalAvgGetValue(FunctionContext* ctx,
   bool is_nan = false;
   bool overflow = false;
   Decimal16Value result = sum.Divide<int128_t>(sum_type, count, count_type,
-      output_desc.scale, &is_nan, &overflow);
+      output_desc.precision, output_desc.scale, &is_nan, &overflow);
   if (UNLIKELY(is_nan)) return DecimalVal::null();
   if (UNLIKELY(overflow)) {
     ctx->AddWarning("Avg computation overflowed, returning NULL");
@@ -464,17 +475,18 @@ void AggregateFunctions::SumDecimalRemove(FunctionContext* ctx,
   SumDecimalAddOrSubtract(ctx, src, dst, true);
 }
 
-void AggregateFunctions::SumDecimalAddOrSubtract(FunctionContext* ctx,
+// Always inline in IR so that constants can be replaced.
+IR_ALWAYS_INLINE void AggregateFunctions::SumDecimalAddOrSubtract(FunctionContext* ctx,
     const DecimalVal& src, DecimalVal* dst, bool subtract) {
   if (src.is_null) return;
   if (dst->is_null) InitZero<DecimalVal>(ctx, dst);
-  const FunctionContext::TypeDesc* arg_desc = ctx->GetArgType(0);
+  int precision = Expr::GetConstantInt(*ctx, Expr::ARG_TYPE_PRECISION, 0);
   // Since the src and dst are guaranteed to be the same scale, we can just
   // do a simple add.
   int m = subtract ? -1 : 1;
-  if (arg_desc->precision <= 9) {
+  if (precision <= 9) {
     dst->val16 += m * src.val4;
-  } else if (arg_desc->precision <= 19) {
+  } else if (precision <= 19) {
     dst->val16 += m * src.val8;
   } else {
     dst->val16 += m * src.val16;
@@ -530,11 +542,10 @@ template<>
 void AggregateFunctions::Min(FunctionContext* ctx,
     const DecimalVal& src, DecimalVal* dst) {
   if (src.is_null) return;
-  const FunctionContext::TypeDesc* arg = ctx->GetArgType(0);
-  DCHECK(arg != NULL);
-  if (arg->precision <= 9) {
+  int precision = Expr::GetConstantInt(*ctx, Expr::ARG_TYPE_PRECISION, 0);
+  if (precision <= 9) {
     if (dst->is_null || src.val4 < dst->val4) *dst = src;
-  } else if (arg->precision <= 19) {
+  } else if (precision <= 19) {
     if (dst->is_null || src.val8 < dst->val8) *dst = src;
   } else {
     if (dst->is_null || src.val16 < dst->val16) *dst = src;
@@ -545,11 +556,10 @@ template<>
 void AggregateFunctions::Max(FunctionContext* ctx,
     const DecimalVal& src, DecimalVal* dst) {
   if (src.is_null) return;
-  const FunctionContext::TypeDesc* arg = ctx->GetArgType(0);
-  DCHECK(arg != NULL);
-  if (arg->precision <= 9) {
+  int precision = Expr::GetConstantInt(*ctx, Expr::ARG_TYPE_PRECISION, 0);
+  if (precision <= 9) {
     if (dst->is_null || src.val4 > dst->val4) *dst = src;
-  } else if (arg->precision <= 19) {
+  } else if (precision <= 19) {
     if (dst->is_null || src.val8 > dst->val8) *dst = src;
   } else {
     if (dst->is_null || src.val16 > dst->val16) *dst = src;

@@ -25,9 +25,11 @@ set(LIBRARY_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/util")
 set(EXECUTABLE_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/util")
 
 add_library(Util
+  auth-util.cc
   avro-util.cc
   benchmark.cc
   bitmap.cc
+  bloom-filter.cc
   cgroups-mgr.cc
   codec.cc
   compress.cc
@@ -64,7 +66,6 @@ add_library(Util
   redactor.cc
   runtime-profile.cc
   simple-logger.cc
-  spinlock.cc
   symbols-util.cc
   static-asserts.cc
   summary-util.cc
@@ -135,3 +136,5 @@ ADD_BE_TEST(lru-cache-test)
 ADD_BE_TEST(filesystem-util-test)
 ADD_BE_TEST(bitmap-test)
 ADD_BE_TEST(fixed-size-hash-table-test)
+ADD_BE_TEST(bloom-filter-test)
+ADD_BE_TEST(logging-support-test)

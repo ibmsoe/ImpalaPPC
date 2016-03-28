@@ -14,6 +14,8 @@
 
 #include "runtime/timestamp-value.h"
 
+#include "runtime/timestamp-parse-util.h"
+
 #include "common/names.h"
 
 using boost::date_time::not_a_date_time;
@@ -57,7 +59,7 @@ TimestampValue::TimestampValue(const char* str, int len,
   TimestampParser::Parse(str, len, dt_ctx, &date_, &time_);
 }
 
-int TimestampValue::Format(const DateTimeFormatContext& dt_ctx, int len, char* buff) {
+int TimestampValue::Format(const DateTimeFormatContext& dt_ctx, int len, char* buff) const {
   return TimestampParser::Format(dt_ctx, date_, time_, len, buff);
 }
 
@@ -93,6 +95,39 @@ void TimestampValue::UtcToLocal() {
 
 ostream& operator<<(ostream& os, const TimestampValue& timestamp_value) {
   return os << timestamp_value.DebugString();
+}
+
+ptime TimestampValue::UnixTimeToPtime(time_t unix_time) const {
+  /// Unix times are represented internally in boost as 32 bit ints which limits the
+  /// range of dates to 1901-2038 (https://svn.boost.org/trac/boost/ticket/3109), so
+  /// libc functions will be used instead.
+  tm temp_tm;
+  if (FLAGS_use_local_tz_for_unix_timestamp_conversions) {
+    if (UNLIKELY(localtime_r(&unix_time, &temp_tm) == NULL)) {
+      return ptime(not_a_date_time);
+    }
+  } else {
+    if (UNLIKELY(gmtime_r(&unix_time, &temp_tm) == NULL)) {
+      return ptime(not_a_date_time);
+    }
+  }
+  try {
+    return ptime_from_tm(temp_tm);
+  } catch (std::exception& e) {
+    return ptime(not_a_date_time);
+  }
+}
+
+string TimestampValue::DebugString() const {
+  stringstream ss;
+  if (HasDate()) {
+    ss << boost::gregorian::to_iso_extended_string(date_);
+  }
+  if (HasTime()) {
+    if (HasDate()) ss << " ";
+    ss << boost::posix_time::to_simple_string(time_);
+  }
+  return ss.str();
 }
 
 }

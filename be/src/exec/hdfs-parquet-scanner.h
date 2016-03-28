@@ -270,7 +270,15 @@ struct HdfsFileDesc;
 ///   than the full 3-level structure. Note that the collection reader references the
 ///   outer array, which determines how long each materialized array is, and the items in
 ///   the array are from the inner array.
-
+///
+/// ---- Runtime filters ----
+///
+/// HdfsParquetScanner is able to apply runtime filters that arrive before or during
+/// scanning. Filters are applied at both the row group (see AssembleRows()) and row (see
+/// ReadRow()) scope. If all filter predicates do not pass, the row or row group will be
+/// excluded from output. Only partition-column filters are applied at AssembleRows(). The
+/// FilterContexts for these filters are cloned from the parent scan node and attached to
+/// the ScannerContext.
 class HdfsParquetScanner : public HdfsScanner {
  public:
   HdfsParquetScanner(HdfsScanNode* scan_node, RuntimeState* state);
@@ -372,6 +380,35 @@ class HdfsParquetScanner : public HdfsScanner {
   class BoolColumnReader;
   friend class BoolColumnReader;
 
+  /// Cached runtime filter contexts, one for each filter that applies to this column.
+  vector<const FilterContext*> filter_ctxs_;
+
+  struct LocalFilterStats {
+    /// Total number of rows to which each filter was applied
+    int64_t considered;
+
+    /// Total number of rows that each filter rejected.
+    int64_t rejected;
+
+    /// Total number of rows that each filter could have been applied to (if it were
+    /// available from row 0).
+    int64_t total_possible;
+
+    /// Use known-width type to act as logical boolean.  Set to 1 if corresponding filter
+    /// in filter_ctxs_ should be applied, 0 if it was ineffective and was disabled.
+    uint8_t enabled;
+
+    /// Padding to ensure structs do not straddle cache-line boundary.
+    uint8_t padding[7];
+
+    LocalFilterStats() : considered(0), rejected(0), total_possible(0), enabled(1) { }
+  };
+
+  /// Track statistics of each filter (one for each filter in filter_ctxs_) per scanner so
+  /// that expensive aggregation up to the scan node can be performed once, during
+  /// Close().
+  vector<LocalFilterStats> filter_stats_;
+
   /// Column reader for each materialized columns for this file.
   std::vector<ColumnReader*> column_readers_;
 
@@ -420,13 +457,18 @@ class HdfsParquetScanner : public HdfsScanner {
   /// 'row_group_idx' is used for error checking when this is called on the table-level
   /// tuple. If reading into a collection, 'row_group_idx' doesn't matter.
   ///
+  /// If 'filters_pass' is set to false by this method, the partition columns associated
+  /// with this row group did not pass all the runtime filters (and therefore only filter
+  /// contexts that apply only to partition columns are checked).
+  ///
   /// IN_COLLECTION is true if the columns we are materializing are part of a Parquet
   /// collection. MATERIALIZING_COLLECTION is true if we are materializing tuples inside
   /// a nested collection.
   template <bool IN_COLLECTION, bool MATERIALIZING_COLLECTION>
   bool AssembleRows(const TupleDescriptor* tuple_desc,
       const std::vector<ColumnReader*>& column_readers, int new_collection_rep_level,
-      int row_group_idx, CollectionValueBuilder* coll_value_builder);
+      int row_group_idx, CollectionValueBuilder* coll_value_builder,
+      bool* filters_pass);
 
   /// Function used by AssembleRows() to read a single row into 'tuple'. Returns false if
   /// execution should be aborted for some reason, otherwise returns true.
@@ -543,7 +585,7 @@ class HdfsParquetScanner : public HdfsScanner {
     TWO_LEVEL,
     THREE_LEVEL
   };
-  Status ResolvePathHelper(ArrayEncoding array_encoding, const std::vector<int>& path,
+  Status ResolvePathHelper(ArrayEncoding array_encoding, const SchemaPath& path,
       SchemaNode** node, bool* pos_field, bool* missing_field);
 
   /// Helper functions for ResolvePathHelper().

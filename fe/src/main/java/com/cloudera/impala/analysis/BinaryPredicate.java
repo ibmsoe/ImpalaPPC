@@ -42,6 +42,9 @@ import com.google.common.collect.Lists;
 public class BinaryPredicate extends Predicate {
   private final static Logger LOG = LoggerFactory.getLogger(BinaryPredicate.class);
 
+  // true if this BinaryPredicate is inferred from slot equivalences, false otherwise.
+  private boolean isInferred_ = false;
+
   public enum Operator {
     EQ("=", "eq", TComparisonOp.EQ),
     NE("!=", "ne", TComparisonOp.NE),
@@ -49,6 +52,8 @@ public class BinaryPredicate extends Predicate {
     GE(">=", "ge", TComparisonOp.GE),
     LT("<", "lt", TComparisonOp.LT),
     GT(">", "gt", TComparisonOp.GT),
+    DISTINCT_FROM("IS DISTINCT FROM", "distinctfrom", TComparisonOp.DISTINCT_FROM),
+    NOT_DISTINCT("IS NOT DISTINCT FROM", "notdistinct", TComparisonOp.NOT_DISTINCT),
     // Same as EQ, except it returns True if the rhs is NULL. There is no backend
     // function for this. The functionality is embedded in the hash-join
     // implementation.
@@ -68,6 +73,7 @@ public class BinaryPredicate extends Predicate {
     public String toString() { return description_; }
     public String getName() { return name_; }
     public TComparisonOp getThriftOp() { return thriftOp_; }
+    public boolean isEquivalence() { return this == EQ || this == NOT_DISTINCT; }
 
     public Operator converse() {
       switch (this) {
@@ -77,6 +83,8 @@ public class BinaryPredicate extends Predicate {
         case GE: return LE;
         case LT: return GT;
         case GT: return LT;
+        case DISTINCT_FROM: return DISTINCT_FROM;
+        case NOT_DISTINCT: return NOT_DISTINCT;
         case NULL_MATCHING_EQ:
           throw new IllegalStateException("Not implemented");
         default: throw new IllegalStateException("Invalid operator");
@@ -102,6 +110,29 @@ public class BinaryPredicate extends Predicate {
     }
   }
 
+  /**
+   * Returns a version of 'predicate' that always has the SlotRef, if there is one, on the
+   * left and the other expression on the right. This also folds constant children of the
+   * predicate into literals, if possible.
+   * Returns null if this is not a SlotRef comparison.
+   * TODO(kudu-merge): create a more general mechanism and retire this function
+   */
+  public static BinaryPredicate normalizeSlotRefComparison(BinaryPredicate predicate,
+      Analyzer analyzer)
+      throws AnalysisException {
+    SlotRef ref = predicate.getBoundSlot();
+    if (ref == null) return null;
+    if (ref != predicate.getChild(0).unwrapSlotRef(true)) {
+      Preconditions.checkState(ref == predicate.getChild(1).unwrapSlotRef(true));
+      predicate = new BinaryPredicate(predicate.getOp().converse(), ref,
+          predicate.getChild(0));
+      predicate.analyzeNoThrow(analyzer);
+    }
+    predicate.foldConstantChildren(analyzer);
+    predicate.analyzeNoThrow(analyzer);
+    return predicate;
+  }
+
   private Operator op_;
 
   public Operator getOp() { return op_; }
@@ -119,9 +150,13 @@ public class BinaryPredicate extends Predicate {
   protected BinaryPredicate(BinaryPredicate other) {
     super(other);
     op_ = other.op_;
+    isInferred_ = other.isInferred_;
   }
 
   public boolean isNullMatchingEq() { return op_ == Operator.NULL_MATCHING_EQ; }
+
+  public boolean isInferred() { return isInferred_; }
+  public void setIsInferred() { isInferred_ = true; }
 
   @Override
   public String toSqlImpl() {
@@ -204,18 +239,17 @@ public class BinaryPredicate extends Predicate {
     // required will be performed when the subquery is unnested.
     if (!contains(Subquery.class)) castForFunctionCall(true);
 
-    // determine selectivity
-    // TODO: Compute selectivity for nested predicates
+    // Determine selectivity
+    // TODO: Compute selectivity for nested predicates.
+    // TODO: Improve estimation using histograms.
     Reference<SlotRef> slotRefRef = new Reference<SlotRef>();
-    if (op_ == Operator.EQ
-        && isSingleColumnPredicate(slotRefRef, null)
-        && slotRefRef.getRef().getNumDistinctValues() > 0) {
-      Preconditions.checkState(slotRefRef.getRef() != null);
-      selectivity_ = 1.0 / slotRefRef.getRef().getNumDistinctValues();
-      selectivity_ = Math.max(0, Math.min(1, selectivity_));
-    } else {
-      // TODO: improve using histograms, once they show up
-      selectivity_ = Expr.DEFAULT_SELECTIVITY;
+    if ((op_ == Operator.EQ || op_ == Operator.NOT_DISTINCT)
+        && isSingleColumnPredicate(slotRefRef, null)) {
+      long distinctValues = slotRefRef.getRef().getNumDistinctValues();
+      if (distinctValues > 0) {
+        selectivity_ = 1.0 / distinctValues;
+        selectivity_ = Math.max(0, Math.min(1, selectivity_));
+      }
     }
   }
 
@@ -292,6 +326,12 @@ public class BinaryPredicate extends Predicate {
         break;
       case GT:
         newOp = Operator.LE;
+        break;
+      case DISTINCT_FROM:
+        newOp = Operator.NOT_DISTINCT;
+        break;
+      case NOT_DISTINCT:
+        newOp = Operator.DISTINCT_FROM;
         break;
       case NULL_MATCHING_EQ:
         throw new IllegalStateException("Not implemented");

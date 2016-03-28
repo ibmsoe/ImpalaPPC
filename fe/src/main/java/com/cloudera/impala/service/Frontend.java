@@ -32,6 +32,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.cloudera.impala.catalog.KuduTable;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hive.service.cli.thrift.TGetColumnsReq;
@@ -284,7 +285,9 @@ public class Frontend {
       ddl.setShow_fns_params(stmt.toThrift());
       metadata.setColumns(Arrays.asList(
           new TColumn("return type", Type.STRING.toThrift()),
-          new TColumn("signature", Type.STRING.toThrift())));
+          new TColumn("signature", Type.STRING.toThrift()),
+          new TColumn("binary type", Type.STRING.toThrift()),
+          new TColumn("is persistent", Type.STRING.toThrift())));
     } else if (analysis.isShowCreateTableStmt()) {
       ddl.op_type = TCatalogOpType.SHOW_CREATE_TABLE;
       ddl.setShow_create_table_params(analysis.getShowCreateTableStmt().toThrift());
@@ -705,6 +708,8 @@ public class Frontend {
       return ((HBaseTable) table).getTableStats();
     } else if (table instanceof DataSourceTable) {
       return ((DataSourceTable) table).getTableStats();
+    } else if (table instanceof KuduTable) {
+      return ((KuduTable) table).getTableStats();
     } else {
       throw new InternalException("Invalid table class: " + table.getClass());
     }
@@ -854,6 +859,11 @@ public class Frontend {
    */
   private AnalysisContext.AnalysisResult analyzeStmt(TQueryCtx queryCtx)
       throws AnalysisException, InternalException, AuthorizationException {
+    if (!impaladCatalog_.isReady()) {
+      throw new AnalysisException("This Impala daemon is not ready to accept user " +
+          "requests. Status: Waiting for catalog update from the StateStore.");
+    }
+
     AnalysisContext analysisCtx = new AnalysisContext(impaladCatalog_, queryCtx,
         authzConfig_);
     LOG.debug("analyze query " + queryCtx.request.stmt);
@@ -929,7 +939,8 @@ public class Frontend {
 
     // create TQueryExecRequest
     Preconditions.checkState(analysisResult.isQueryStmt() || analysisResult.isDmlStmt()
-        || analysisResult.isCreateTableAsSelectStmt());
+        || analysisResult.isCreateTableAsSelectStmt() || analysisResult.isUpdateStmt()
+        || analysisResult.isDeleteStmt());
 
     TQueryExecRequest queryExecRequest = new TQueryExecRequest();
     // create plan
@@ -1007,8 +1018,8 @@ public class Frontend {
       queryExecRequest.addToFragments(thriftFragment);
     }
 
-    // Use VERBOSE by default for all non-explain statements.
-    TExplainLevel explainLevel = TExplainLevel.VERBOSE;
+    // Use EXTENDED by default for all non-explain statements.
+    TExplainLevel explainLevel = TExplainLevel.EXTENDED;
     // Use the query option for explain stmts and tests (e.g., planner tests).
     if (analysisResult.isExplainStmt() || RuntimeEnv.INSTANCE.isTestEnv()) {
       explainLevel = queryCtx.request.query_options.getExplain_level();
@@ -1050,10 +1061,8 @@ public class Frontend {
         metadata.addToColumns(colDesc);
       }
       result.setResult_set_metadata(metadata);
-    } else {
-      Preconditions.checkState(analysisResult.isInsertStmt() ||
-          analysisResult.isCreateTableAsSelectStmt());
-
+    } else if (analysisResult.isInsertStmt() ||
+        analysisResult.isCreateTableAsSelectStmt()) {
       // For CTAS the overall TExecRequest statement type is DDL, but the
       // query_exec_request should be DML
       result.stmt_type =
@@ -1075,6 +1084,10 @@ public class Frontend {
             hdfsTable.getHdfsBaseDir() + "/_impala_insert_staging");
         queryExecRequest.setFinalize_params(finalizeParams);
       }
+    } else {
+      Preconditions.checkState(analysisResult.isUpdateStmt() || analysisResult.isDeleteStmt());
+      result.stmt_type = TStmtType.DML;
+      result.query_exec_request.stmt_type = TStmtType.DML;
     }
 
     validateTableIds(analysisResult.getAnalyzer(), result);

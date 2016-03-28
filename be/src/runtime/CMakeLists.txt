@@ -23,7 +23,6 @@ set(EXECUTABLE_OUTPUT_PATH "${BUILD_OUTPUT_ROOT_DIRECTORY}/runtime")
 add_library(Runtime
   buffered-block-mgr.cc
   buffered-tuple-stream.cc
-  buffered-tuple-stream-ir.cc
   client-cache.cc
   coordinator.cc
   data-stream-mgr.cc
@@ -49,6 +48,7 @@ add_library(Runtime
   raw-value.cc
   raw-value-ir.cc
   row-batch.cc
+  runtime-filter.cc
   runtime-state.cc
   sorted-run-merger.cc
   sorter.cc

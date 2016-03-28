@@ -18,7 +18,7 @@
 import os
 import pexpect
 import pytest
-import shlex
+import re
 import shutil
 import socket
 import signal
@@ -29,10 +29,12 @@ from subprocess import Popen, PIPE
 from tests.common.impala_service import ImpaladService
 from tests.common.skip import SkipIfLocal
 from time import sleep
+from test_shell_common import assert_var_substitution
 
 SHELL_CMD = "%s/bin/impala-shell.sh" % os.environ['IMPALA_HOME']
 SHELL_HISTORY_FILE = os.path.expanduser("~/.impalahistory")
 TMP_HISTORY_FILE = os.path.expanduser("~/.impalahistorytmp")
+QUERY_FILE_PATH = os.path.join(os.environ['IMPALA_HOME'], 'tests', 'shell')
 
 class TestImpalaShellInteractive(object):
   """Test the impala shell interactively"""
@@ -256,15 +258,28 @@ class TestImpalaShellInteractive(object):
       if t in result.stderr: return
     assert False, "No tip found in output %s" % result.stderr
 
-def run_impala_shell_interactive(command, shell_args=''):
+  @pytest.mark.execute_serially
+  def test_var_substitution(self):
+    cmds = open(os.path.join(QUERY_FILE_PATH, 'test_var_substitution.sql')).read().\
+      split('\n')
+    args = '--var=foo=123 --var=BAR=456 --delimited --output_delimiter=" "'
+    result = run_impala_shell_interactive(cmds, shell_args=args)
+    assert_var_substitution(result)
+
+
+def run_impala_shell_interactive(input_lines, shell_args=''):
   """Runs a command in the Impala shell interactively."""
   cmd = "%s %s" % (SHELL_CMD, shell_args)
+  # if argument "input_lines" is a string, makes it into a list
+  if type(input_lines) is str:
+    input_lines = [input_lines]
   # workaround to make Popen environment 'utf-8' compatible
   # since piping defaults to ascii
   my_env = os.environ
   my_env['PYTHONIOENCODING'] = 'utf-8'
-  p = Popen(shlex.split(cmd), shell=True, stdout=PIPE,
+  p = Popen(cmd, shell=True, stdout=PIPE,
             stdin=PIPE, stderr=PIPE, env=my_env)
-  p.stdin.write(command + "\n")
-  p.stdin.flush()
+  for line in input_lines:
+    p.stdin.write(line + "\n")
+    p.stdin.flush()
   return get_shell_cmd_result(p)

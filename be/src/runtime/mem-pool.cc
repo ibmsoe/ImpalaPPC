@@ -14,6 +14,7 @@
 
 #include "runtime/mem-pool.h"
 #include "runtime/mem-tracker.h"
+#include "util/bit-util.h"
 #include "util/impalad-metrics.h"
 
 #include <algorithm>
@@ -24,31 +25,30 @@
 
 using namespace impala;
 
+#define MEM_POOL_POISON (0x66aa77bb)
+
 DECLARE_bool(disable_mem_pools);
 
-const int MemPool::DEFAULT_INITIAL_CHUNK_SIZE;
+const int MemPool::INITIAL_CHUNK_SIZE;
+const int MemPool::MAX_CHUNK_SIZE;
 
 const char* MemPool::LLVM_CLASS_NAME = "class.impala::MemPool";
+uint32_t MemPool::zero_length_region_ = MEM_POOL_POISON;
 
-MemPool::MemPool(MemTracker* mem_tracker, int chunk_size)
+MemPool::MemPool(MemTracker* mem_tracker)
   : current_chunk_idx_(-1),
-    last_offset_conversion_chunk_idx_(-1),
-    // round up chunk size to nearest 8 bytes
-    chunk_size_(chunk_size == 0
-      ? 0
-      : ((chunk_size + 7) / 8) * 8),
+    next_chunk_size_(INITIAL_CHUNK_SIZE),
     total_allocated_bytes_(0),
     peak_allocated_bytes_(0),
     total_reserved_bytes_(0),
     mem_tracker_(mem_tracker) {
-  DCHECK_GE(chunk_size_, 0);
   DCHECK(mem_tracker != NULL);
+  DCHECK_EQ(zero_length_region_, MEM_POOL_POISON);
 }
 
 MemPool::ChunkInfo::ChunkInfo(int64_t size, uint8_t* buf)
   : data(buf),
     size(size),
-    cumulative_allocated_bytes(0),
     allocated_bytes(0) {
   if (ImpaladMetrics::MEM_POOL_TOTAL_BYTES != NULL) {
     ImpaladMetrics::MEM_POOL_TOTAL_BYTES->Increment(size);
@@ -66,6 +66,17 @@ MemPool::~MemPool() {
   if (ImpaladMetrics::MEM_POOL_TOTAL_BYTES != NULL) {
     ImpaladMetrics::MEM_POOL_TOTAL_BYTES->Increment(-total_bytes_released);
   }
+  DCHECK_EQ(zero_length_region_, MEM_POOL_POISON);
+}
+
+void MemPool::Clear() {
+  current_chunk_idx_ = -1;
+  for (std::vector<ChunkInfo>::iterator chunk = chunks_.begin();
+       chunk != chunks_.end(); ++chunk) {
+    chunk->allocated_bytes = 0;
+  }
+  total_allocated_bytes_ = 0;
+  DCHECK(CheckIntegrity(false));
 }
 
 void MemPool::FreeAll() {
@@ -75,8 +86,8 @@ void MemPool::FreeAll() {
     free(chunks_[i].data);
   }
   chunks_.clear();
+  next_chunk_size_ = INITIAL_CHUNK_SIZE;
   current_chunk_idx_ = -1;
-  last_offset_conversion_chunk_idx_ = -1;
   total_allocated_bytes_ = 0;
   total_reserved_bytes_ = 0;
 
@@ -108,18 +119,16 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) {
 
   if (current_chunk_idx_ == static_cast<int>(chunks_.size())) {
     // need to allocate new chunk.
-    int64_t chunk_size = chunk_size_;
-    if (chunk_size == 0) {
-      if (current_chunk_idx_ == 0) {
-        chunk_size = DEFAULT_INITIAL_CHUNK_SIZE;
-      } else {
-        // double the size of the last chunk in the list
-        chunk_size = chunks_[current_chunk_idx_ - 1].size * 2;
-      }
-    }
-    chunk_size = ::max(min_size, chunk_size);
+    int64_t chunk_size;
+    DCHECK_GE(next_chunk_size_, INITIAL_CHUNK_SIZE);
+    DCHECK_LE(next_chunk_size_, MAX_CHUNK_SIZE);
 
-    if (FLAGS_disable_mem_pools) chunk_size = min_size;
+    if (FLAGS_disable_mem_pools) {
+      // Disable pooling by sizing the chunk to fit only this allocation.
+      chunk_size = min_size;
+    } else {
+      chunk_size = max<int64_t>(min_size, next_chunk_size_);
+    }
 
     if (check_limits) {
       if (!mem_tracker_->TryConsume(chunk_size)) {
@@ -151,12 +160,9 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) {
       chunks_.insert(insert_chunk, ChunkInfo(chunk_size, buf));
     }
     total_reserved_bytes_ += chunk_size;
-  }
-
-  if (current_chunk_idx_ > 0) {
-    ChunkInfo& prev_chunk = chunks_[current_chunk_idx_ - 1];
-    chunks_[current_chunk_idx_].cumulative_allocated_bytes =
-        prev_chunk.cumulative_allocated_bytes + prev_chunk.allocated_bytes;
+    // Don't increment the chunk size until the allocation succeeds: if an attempted
+    // large allocation fails we don't want to increase the chunk size further.
+    next_chunk_size_ = static_cast<int>(min<int64_t>(chunk_size * 2, MAX_CHUNK_SIZE));
   }
 
   DCHECK_LT(current_chunk_idx_, static_cast<int>(chunks_.size()));
@@ -189,8 +195,11 @@ void MemPool::AcquireData(MemPool* src, bool keep_current) {
   src->total_reserved_bytes_ -= total_transfered_bytes;
   total_reserved_bytes_ += total_transfered_bytes;
 
-  src->mem_tracker_->Release(total_transfered_bytes);
-  mem_tracker_->Consume(total_transfered_bytes);
+  // Skip unnecessary atomic ops if the mem_trackers are the same.
+  if (src->mem_tracker_ != mem_tracker_) {
+    src->mem_tracker_->Release(total_transfered_bytes);
+    mem_tracker_->Consume(total_transfered_bytes);
+  }
 
   // insert new chunks after current_chunk_idx_
   vector<ChunkInfo>::iterator insert_chunk = chunks_.begin() + current_chunk_idx_ + 1;
@@ -202,7 +211,6 @@ void MemPool::AcquireData(MemPool* src, bool keep_current) {
     src->current_chunk_idx_ = 0;
     DCHECK(src->chunks_.size() == 1 || src->chunks_[1].allocated_bytes == 0);
     total_allocated_bytes_ += src->total_allocated_bytes_ - src->GetFreeOffset();
-    src->chunks_[0].cumulative_allocated_bytes = 0;
     src->total_allocated_bytes_ = src->GetFreeOffset();
   } else {
     src->current_chunk_idx_ = -1;
@@ -211,34 +219,8 @@ void MemPool::AcquireData(MemPool* src, bool keep_current) {
   }
   peak_allocated_bytes_ = std::max(total_allocated_bytes_, peak_allocated_bytes_);
 
-  // recompute cumulative_allocated_bytes
-  int start_idx = chunks_.size() - num_acquired_chunks;
-  int cumulative_bytes = (start_idx == 0
-      ? 0
-      : chunks_[start_idx - 1].cumulative_allocated_bytes
-        + chunks_[start_idx - 1].allocated_bytes);
-  for (int i = start_idx; i <= current_chunk_idx_; ++i) {
-    chunks_[i].cumulative_allocated_bytes = cumulative_bytes;
-    cumulative_bytes += chunks_[i].allocated_bytes;
-  }
-
   if (!keep_current) src->FreeAll();
   DCHECK(CheckIntegrity(false));
-}
-
-bool MemPool::Contains(uint8_t* ptr, int size) {
-  for (int i = 0; i < chunks_.size(); ++i) {
-    const ChunkInfo& info = chunks_[i];
-    if (ptr >= info.data && ptr < info.data + info.allocated_bytes) {
-      if (ptr + size > info.data + info.allocated_bytes) {
-        DCHECK_LE(reinterpret_cast<size_t>(ptr + size),
-                  reinterpret_cast<size_t>(info.data + info.allocated_bytes));
-        return false;
-      }
-      return true;
-    }
-  }
-  return false;
 }
 
 string MemPool::DebugString() {
@@ -250,7 +232,6 @@ string MemPool::DebugString() {
     out << (i > 0 ? " " : "")
         << str
         << chunks_[i].size
-        << "/" << chunks_[i].cumulative_allocated_bytes
         << "/" << chunks_[i].allocated_bytes;
   }
   out << "] current_chunk=" << current_chunk_idx_
@@ -269,6 +250,8 @@ int64_t MemPool::GetTotalChunkSizes() const {
 }
 
 bool MemPool::CheckIntegrity(bool current_chunk_empty) {
+  DCHECK_EQ(zero_length_region_, MEM_POOL_POISON);
+
   // Without pooling, there are way too many chunks and this takes too long.
   if (FLAGS_disable_mem_pools) return true;
 
@@ -288,64 +271,8 @@ bool MemPool::CheckIntegrity(bool current_chunk_empty) {
     } else {
       DCHECK_EQ(chunks_[i].allocated_bytes, 0);
     }
-    if (i > 0 && i <= current_chunk_idx_) {
-      DCHECK_EQ(chunks_[i-1].cumulative_allocated_bytes + chunks_[i-1].allocated_bytes,
-                chunks_[i].cumulative_allocated_bytes);
-    }
-    if (chunk_size_ != 0) DCHECK_GE(chunks_[i].size, chunk_size_);
     total_allocated += chunks_[i].allocated_bytes;
   }
   DCHECK_EQ(total_allocated, total_allocated_bytes_);
   return true;
-}
-
-int MemPool::GetOffsetHelper(uint8_t* data) {
-  if (chunks_.empty()) return -1;
-  // try to locate chunk containing 'data', starting with chunk following
-  // the last one we looked at
-  for (int i = 0; i < chunks_.size(); ++i) {
-    int idx = (last_offset_conversion_chunk_idx_ + i + 1) % chunks_.size();
-    const ChunkInfo& info = chunks_[idx];
-    if (info.data <= data && info.data + info.allocated_bytes > data) {
-      last_offset_conversion_chunk_idx_ = idx;
-      return info.cumulative_allocated_bytes + data - info.data;
-    }
-  }
-  return -1;
-}
-
-uint8_t* MemPool::GetDataPtrHelper(int offset) {
-  if (offset > total_allocated_bytes_) return NULL;
-  for (int i = 0; i < chunks_.size(); ++i) {
-    int idx = (last_offset_conversion_chunk_idx_ + i + 1) % chunks_.size();
-    const ChunkInfo& info = chunks_[idx];
-    if (info.cumulative_allocated_bytes <= offset
-        && info.cumulative_allocated_bytes + info.allocated_bytes > offset) {
-      last_offset_conversion_chunk_idx_ = idx;
-      return info.data + offset - info.cumulative_allocated_bytes;
-    }
-  }
-  return NULL;
-}
-
-void MemPool::GetChunkInfo(vector<pair<uint8_t*, int> >* chunk_info) {
-  chunk_info->clear();
-  for (vector<ChunkInfo>::iterator info = chunks_.begin(); info != chunks_.end(); ++info) {
-    chunk_info->push_back(make_pair(info->data, info->allocated_bytes));
-  }
-}
-
-string MemPool::DebugPrint() {
-  char str[3];
-  stringstream out;
-  for (int i = 0; i < chunks_.size(); ++i) {
-    ChunkInfo& info = chunks_[i];
-    if (info.allocated_bytes == 0) return out.str();
-
-    for (int j = 0; j < info.allocated_bytes; ++j) {
-      sprintf(str, "%x ", info.data[j]);
-      out << str;
-    }
-  }
-  return out.str();
 }

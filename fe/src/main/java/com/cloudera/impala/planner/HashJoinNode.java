@@ -46,11 +46,6 @@ import com.google.common.collect.Lists;
 public class HashJoinNode extends JoinNode {
   private final static Logger LOG = LoggerFactory.getLogger(HashJoinNode.class);
 
-  // If true, this node can add filters for the probe side that can be generated
-  // after reading the build side. This can be very helpful if the join is selective and
-  // there are few build rows.
-  private boolean addProbeFilters_;
-
   public HashJoinNode(
       PlanNode outer, PlanNode inner, DistributionMode distrMode, JoinOperator joinOp,
       List<BinaryPredicate> eqJoinConjuncts, List<Expr> otherJoinConjuncts) {
@@ -61,7 +56,6 @@ public class HashJoinNode extends JoinNode {
   }
 
   public List<BinaryPredicate> getEqJoinConjuncts() { return eqJoinConjuncts_; }
-  public void setAddProbeFilters(boolean b) { addProbeFilters_ = true; }
 
   @Override
   public void init(Analyzer analyzer) throws ImpalaException {
@@ -127,15 +121,16 @@ public class HashJoinNode extends JoinNode {
     msg.hash_join_node = new THashJoinNode();
     msg.hash_join_node.join_op = joinOp_.toThrift();
     for (Expr entry: eqJoinConjuncts_) {
+      BinaryPredicate bp = (BinaryPredicate)entry;
       TEqJoinCondition eqJoinCondition =
-          new TEqJoinCondition(entry.getChild(0).treeToThrift(),
-              entry.getChild(1).treeToThrift());
+          new TEqJoinCondition(bp.getChild(0).treeToThrift(),
+              bp.getChild(1).treeToThrift(),
+              bp.getOp() == BinaryPredicate.Operator.NOT_DISTINCT);
       msg.hash_join_node.addToEq_join_conjuncts(eqJoinCondition);
     }
     for (Expr e: otherJoinConjuncts_) {
       msg.hash_join_node.addToOther_join_conjuncts(e.treeToThrift());
     }
-    msg.hash_join_node.setAdd_probe_filters(addProbeFilters_);
   }
 
   @Override
@@ -160,6 +155,10 @@ public class HashJoinNode extends JoinNode {
       if (!conjuncts_.isEmpty()) {
         output.append(detailPrefix + "other predicates: ")
         .append(getExplainString(conjuncts_) + "\n");
+      }
+      if (!runtimeFilters_.isEmpty()) {
+        output.append(detailPrefix + "runtime filters: ");
+        output.append(getRuntimeFilterExplainString(true));
       }
     }
     return output.toString();

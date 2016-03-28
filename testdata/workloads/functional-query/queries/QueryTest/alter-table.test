@@ -183,6 +183,28 @@ describe t2
 string,string,string
 ====
 ---- QUERY
+# IMPALA-2974: Change a single column to a complex type.
+alter table t2 change column c c array<struct<f1:decimal(10,2)>>;
+describe t2;
+---- RESULTS
+'a','int','Int Col'
+'b','struct<\n  f1:array<int>,\n  f2:map<string,struct<\n    f1:bigint\n  >>\n>',''
+'c','array<struct<\n  f1:decimal(10,2)\n>>',''
+---- TYPES
+string,string,string
+====
+---- QUERY
+# Change a single complex-typed column to a scalar type.
+alter table t2 change column c c varchar(20);
+describe t2;
+---- RESULTS
+'a','int','Int Col'
+'b','struct<\n  f1:array<int>,\n  f2:map<string,struct<\n    f1:bigint\n  >>\n>',''
+'c','varchar(20)',''
+---- TYPES
+string,string,string
+====
+---- QUERY
 create external table jointbl_test like functional.jointbl
 ---- RESULTS
 ====
@@ -289,6 +311,12 @@ insert overwrite table t_part partition(j=1, s='2012/withslash')
 select 1 from functional.alltypes limit 1
 ---- RESULTS
 j=1/s=2012%2Fwithslash/: 1
+====
+---- QUERY
+# Refresh the table to ensure all partitions have up-to-date list of file and block
+# metadata.
+refresh t_part;
+---- RESULTS
 ====
 ---- QUERY
 select i, j, s from t_part
