@@ -42,8 +42,19 @@ const i32 INVALID_PLAN_NODE_ID = -1
 // Constant default partition ID, must be < 0 to avoid collisions
 const i64 DEFAULT_PARTITION_ID = -1;
 
-// Query options that correspond to ImpalaService.ImpalaQueryOptions,
-// with their respective defaults
+// Query options that correspond to ImpalaService.ImpalaQueryOptions, with their
+// respective defaults. Query options can be set in the following ways:
+//
+// 1) Process-wide defaults (via the impalad arg --default_query_options)
+// 2) Resource pool defaults (via resource pool configuration)
+// 3) Session settings (via the SET command or the HS2 OpenSession RPC)
+// 4) HS2/Beeswax configuration 'overlay' in the request metadata
+//
+// (1) and (2) are set by administrators and provide the default query options for a
+// session, in that order, so options set in (2) override those in (1). The user
+// can specify query options with (3) to override the defaults, which are stored in the
+// SessionState. Finally, the client can pass a config 'overlay' (4) in the request
+// metadata which overrides everything else.
 struct TQueryOptions {
   1: optional bool abort_on_error = 0
   2: optional i32 max_errors = 0
@@ -111,6 +122,54 @@ struct TQueryOptions {
   // If the number of rows that are processed for a single query is below the
   // threshold, it will be executed on the coordinator only with codegen disabled
   31: optional i32 exec_single_node_rows_threshold = 100
+
+  // If true, use the table's metadata to produce the partition columns instead of table
+  // scans whenever possible. This option is opt-in by default as this optimization may
+  // produce different results than the scan based approach in some edge cases.
+  32: optional bool optimize_partition_key_scans = 0
+
+  // Specify the prefered locality level of replicas during scan scheduling.
+  // Replicas with an equal or better locality will be preferred.
+  33: optional PlanNodes.TReplicaPreference replica_preference =
+      PlanNodes.TReplicaPreference.CACHE_LOCAL
+
+  // Configure whether scheduling of scans over multiple non-cached replicas will break
+  // ties between multiple, otherwise equivalent locations at random or deterministically.
+  // The former will pick a random replica, the latter will use the replica order from the
+  // metastore. This setting will not affect tie-breaking for cached replicas. Instead,
+  // they will always break ties randomly.
+  34: optional bool random_replica = 0
+
+  // For scan nodes with any conjuncts, use codegen to evaluate the conjuncts if
+  // the number of rows * number of operators in the conjuncts exceeds this threshold.
+  35: optional i64 scan_node_codegen_threshold = 1800000
+
+  // If true, the planner will not generate plans with streaming preaggregations.
+  36: optional bool disable_streaming_preaggregations = 0
+
+  // If true, runtime filter propagation is enabled
+  37: optional Types.TRuntimeFilterMode runtime_filter_mode = 1
+
+  // Size in bytes of Bloom Filters used for runtime filters. Actual size of filter will
+  // be rounded up to the nearest power of two.
+  38: optional i32 runtime_bloom_filter_size = 1048576
+
+  // Time in ms to wait until partition filters are delivered. If 0, the default defined
+  // by the startup flag of the same name is used.
+  39: optional i32 runtime_filter_wait_time_ms = 0
+
+  // If true, per-row runtime filtering is disabled
+  40: optional bool disable_row_runtime_filtering = false
+
+  // Maximum number of runtime filters allowed per query
+  41: optional i32 max_num_runtime_filters = 10
+
+  // If true, use UTF-8 annotation for string columns. Note that char and varchar columns
+  // always use the annotation.
+  //
+  // This is disabled by default in order to preserve the existing behavior of legacy
+  // workloads. In addition, Impala strings are not necessarily UTF8-encoded.
+  42: optional bool parquet_annotate_strings_utf8 = false
 }
 
 // Impala currently has two types of sessions: Beeswax and HiveServer2
@@ -189,6 +248,13 @@ struct TQueryCtx {
 
   // List of tables suspected to have corrupt stats
   10: optional list<CatalogObjects.TTableName> tables_with_corrupt_stats
+
+  // The snapshot timestamp as of which to execute the query
+  // When the backing storage engine supports snapshot timestamps (such as Kudu) this
+  // allows to select a snapshot timestamp on which to perform the scan, making sure that
+  // results returned from multiple scan nodes are consistent.
+  // This defaults to -1 when no timestamp is specified.
+  11: optional i64 snapshot_timestamp = -1;
 }
 
 // Context of a fragment instance, including its unique id, the total number
@@ -201,13 +267,13 @@ struct TPlanFragmentInstanceCtx {
   2: required Types.TUniqueId fragment_instance_id
 
   // ordinal of this fragment instance, range [0, num_fragment_instances)
-  3: required i32 fragment_instance_idx
+  3: required i32 per_fragment_instance_idx
 
   // total number of instances of this fragment
   4: required i32 num_fragment_instances
 
-  // backend number assigned by coord to identify backend
-  5: required i32 backend_num
+  // Index of this fragment instance across all combined instances in this query.
+  5: required i32 fragment_instance_idx
 }
 
 // A scan range plus the parameters needed to execute that scan.
@@ -354,7 +420,7 @@ struct TReportExecStatusParams {
 
   // passed into ExecPlanFragment() as TPlanFragmentInstanceCtx.backend_num
   // required in V1
-  3: optional i32 backend_num
+  3: optional i32 fragment_instance_idx
 
   // required in V1
   4: optional Types.TUniqueId fragment_instance_id
@@ -458,16 +524,71 @@ struct TPoolConfigParams {
 }
 
 // Returned by RequestPoolService.getPoolConfig()
-struct TPoolConfigResult {
+struct TPoolConfig {
   // Maximum number of placed requests before incoming requests are queued.
+  // A value of 0 effectively disables the pool. -1 indicates no limit.
   1: required i64 max_requests
 
   // Maximum number of queued requests before incoming requests are rejected.
+  // Any non-positive number (<= 0) disables queuing, i.e. requests are rejected instead
+  // of queued.
   2: required i64 max_queued
 
-  // Memory limit of the pool before incoming requests are queued.
-  // -1 indicates no limit.
-  3: required i64 mem_limit
+  // Maximum memory resources of the pool in bytes.
+  // A value of 0 effectively disables the pool. -1 indicates no limit.
+  3: required i64 max_mem_resources
+
+  // Maximum amount of time (in milliseconds) that a request will wait to be admitted
+  // before timing out. Optional, if not set then the process default (set via gflags) is
+  // used.
+  4: optional i64 queue_timeout_ms;
+
+  // Default query options that are applied to requests mapped to this pool.
+  5: required string default_query_options;
+}
+
+struct TBloomFilter {
+  // Log_2 of the heap space required for this filter. See BloomFilter::BloomFilter() for
+  // details.
+  1: required i32 log_heap_space
+
+  // List of buckets representing the Bloom Filter contents, laid out contiguously in one
+  // string for efficiency of (de)serialisation. See BloomFilter::Bucket and
+  // BloomFilter::directory_.
+  2: binary directory
+
+  // If true, this filter allows all elements to pass (i.e. its selectivity is 1). If
+  // true, 'directory' and 'log_heap_space' are not meaningful.
+  4: required bool always_true
+}
+
+struct TUpdateFilterResult {
+
+}
+
+struct TUpdateFilterParams {
+  // Filter ID, unique within a query.
+  1: required i32 filter_id
+
+  // Query that this filter is for.
+  2: required Types.TUniqueId query_id
+
+  3: required TBloomFilter bloom_filter
+}
+
+struct TPublishFilterResult {
+
+}
+
+struct TPublishFilterParams {
+  // Filter ID to update
+  1: required i32 filter_id
+
+  // ID of fragment to receive this filter
+  2: required Types.TUniqueId dst_instance_id
+
+  // Actual bloom_filter payload
+  3: required TBloomFilter bloom_filter
 }
 
 service ImpalaInternalService {
@@ -487,4 +608,12 @@ service ImpalaInternalService {
   // Called by sender to transmit single row batch. Returns error indication
   // if params.fragmentId or params.destNodeId are unknown or if data couldn't be read.
   TTransmitDataResult TransmitData(1:TTransmitDataParams params);
+
+  // Called by fragment instances that produce local runtime filters to deliver them to
+  // the coordinator for aggregation and broadcast.
+  TUpdateFilterResult UpdateFilter(1:TUpdateFilterParams params);
+
+  // Called by the coordinator to deliver global runtime filters to fragment instances for
+  // application at plan nodes.
+  TPublishFilterResult PublishFilter(1:TPublishFilterParams params);
 }

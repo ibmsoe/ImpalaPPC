@@ -120,6 +120,12 @@ public class IsNullPredicate extends Predicate {
       uncheckedCastChild(ScalarType.BOOLEAN, 0);
     }
 
+    if (getChild(0).getType().isComplexType()) {
+      String errorMsg = (isNotNull_ ? "IS NOT NULL" : "IS NULL") +
+         " predicate does not support complex types: ";
+      throw new AnalysisException(errorMsg + toSqlImpl());
+    }
+
     if (isNotNull_) {
       fn_ = getBuiltinFunction(
           analyzer, IS_NOT_NULL, collectChildReturnTypes(), CompareMode.IS_IDENTICAL);
@@ -131,7 +137,6 @@ public class IsNullPredicate extends Predicate {
     // determine selectivity
     // TODO: increase this to make sure we don't end up favoring broadcast joins
     // due to underestimated cardinalities?
-    selectivity_ = DEFAULT_SELECTIVITY;
     Reference<SlotRef> slotRefRef = new Reference<SlotRef>();
     if (isSingleColumnPredicate(slotRefRef, null)) {
       SlotDescriptor slotDesc = slotRefRef.getRef().getDesc();

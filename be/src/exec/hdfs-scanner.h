@@ -23,6 +23,7 @@
 #include <boost/scoped_ptr.hpp>
 
 #include "codegen/impala-ir.h"
+#include "common/object-pool.h"
 #include "exec/hdfs-scan-node.h"
 #include "exec/scan-node.h"
 #include "exec/scanner-context.h"
@@ -73,7 +74,8 @@ struct FieldLocation {
 /// and parsing.
 //
 /// If a split is compressed, then a decompressor will be created, either during Prepare()
-/// or at the beginning of ProcessSplit(), and used for decompressing and reading the split.
+/// or at the beginning of ProcessSplit(), and used for decompressing and reading the
+/// split.
 //
 /// For codegen, the implementation is split into two parts.
 /// 1. During the Prepare() phase of the ScanNode, the scanner subclass's static
@@ -146,6 +148,9 @@ class HdfsScanner {
 
   /// Context for this scanner
   ScannerContext* context_;
+
+  /// Object pool for objects with same lifetime as scanner.
+  ObjectPool obj_pool_;
 
   /// The first stream for context_
   ScannerContext::Stream* stream_;
@@ -233,7 +238,7 @@ class HdfsScanner {
       THdfsFileFormat::type type, const std::string& scanner_name);
 
   /// Set batch_ to a new row batch and update tuple_mem_ accordingly.
-  void StartNewRowBatch();
+  Status StartNewRowBatch();
 
   /// Reset internal state for a new scan range.
   virtual Status InitNewRange() = 0;
@@ -244,21 +249,20 @@ class HdfsScanner {
   ///  *tuple_row_mem for outputting tuple rows.
   /// Returns the maximum number of tuples/tuple rows that can be output (before the
   /// current row batch is complete and a new one is allocated).
-  /// Memory returned from this call is invalidated after calling CommitRows.  Callers must
-  /// call GetMemory again after calling this function.
+  /// Memory returned from this call is invalidated after calling CommitRows().
+  /// Callers must call GetMemory() again after calling this function.
   int GetMemory(MemPool** pool, Tuple** tuple_mem, TupleRow** tuple_row_mem);
 
   /// Gets memory for outputting tuples into the CollectionValue being constructed via
-  /// 'builder.' Same output params as GetMemory(). Returns the maximum number of tuples
-  /// that can be output, or 0 if OOM. Sets parse_status_ if OOM (parse_status_ should not
-  /// already be set when calling this function to avoid overwriting it).
+  /// 'builder'. If memory limit is exceeded, an error status is returned. Otherwise,
+  /// returns the maximum number of tuples that can be output in 'num_rows'.
   ///
   /// The returned TupleRow* should not be incremented (i.e. don't call next_row() on
   /// it). Instead, incrementing *tuple_mem will update *tuple_row_mem to be pointing at
   /// the next tuple. This also means its unnecessary to call
   /// (*tuple_row_mem)->SetTuple().
-  int GetCollectionMemory(CollectionValueBuilder* builder, MemPool** pool,
-      Tuple** tuple_mem, TupleRow** tuple_row_mem);
+  Status GetCollectionMemory(CollectionValueBuilder* builder, MemPool** pool,
+      Tuple** tuple_mem, TupleRow** tuple_row_mem, int64_t* num_rows);
 
   /// Commit num_rows to the current row batch.  If this completes, the row batch is
   /// enqueued with the scan node and StartNewRowBatch() is called.

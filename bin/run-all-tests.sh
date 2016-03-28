@@ -18,7 +18,7 @@
 
 # Exit on reference to uninitialized variables and non-zero exit codes
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
 . $IMPALA_HOME/bin/set-pythonpath.sh
 
@@ -29,6 +29,7 @@ trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
 KERB_ARGS=""
 
 . ${IMPALA_HOME}/bin/impala-config.sh > /dev/null 2>&1
+. ${IMPALA_HOME}/testdata/bin/run-step.sh
 if ${CLUSTER_DIR}/admin is_kerberized; then
   KERB_ARGS="--use_kerberos"
 fi
@@ -83,18 +84,19 @@ mkdir -p ${LOG_DIR}
 ulimit -c unlimited
 
 if [[ "${TARGET_FILESYSTEM}" == "hdfs" ]]; then
-  echo "Split and assign HBase regions"
   # To properly test HBase integeration, HBase regions are split and assigned by this
   # script. Restarting HBase will change the region server assignment. Run split-hbase.sh
   # before running any test.
-  ${IMPALA_HOME}/testdata/bin/split-hbase.sh > /dev/null 2>&1
+  run-step "Split and assign HBase regions" split-hbase.log \
+      ${IMPALA_HOME}/testdata/bin/split-hbase.sh
 fi
 
 for i in $(seq 1 $NUM_TEST_ITERATIONS)
 do
   TEST_RET_CODE=0
 
-  ${IMPALA_HOME}/bin/start-impala-cluster.py --log_dir=${LOG_DIR} \
+  run-step "Starting Impala cluster" start-impala-cluster.log \
+      ${IMPALA_HOME}/bin/start-impala-cluster.py --log_dir=${LOG_DIR} \
       ${TEST_START_CLUSTER_ARGS}
 
   if [[ "$BE_TEST" == true ]]; then
@@ -111,8 +113,9 @@ do
   fi
 
   # Run some queries using run-workload to verify run-workload has not been broken.
-  if ! ${IMPALA_HOME}/bin/run-workload.py -w tpch --num_clients=2 --query_names=TPCH-Q1 \
-       --table_format=text/none --exec_options="disable_codegen:False" ${KERB_ARGS}; then
+  if ! run-step "Run test run-workload" test-run-workload.log \
+      ${IMPALA_HOME}/bin/run-workload.py -w tpch --num_clients=2 --query_names=TPCH-Q1 \
+      --table_format=text/none --exec_options="disable_codegen:False" ${KERB_ARGS}; then
     TEST_RET_CODE=1
   fi
 
@@ -126,12 +129,7 @@ do
       # When running against S3, only run the S3 frontend tests.
       MVN_ARGS="-Dtest=S3*"
     fi
-    # quietly resolve dependencies to avoid log spew in jenkins runs
-    if [[ "${USER}" == "jenkins" ]]; then
-      echo "Quietly resolving FE dependencies."
-      mvn -q dependency:resolve
-    fi
-    if ! mvn -fae test ${MVN_ARGS}; then
+    if ! ${IMPALA_HOME}/bin/mvn-quiet.sh -fae test ${MVN_ARGS}; then
       TEST_RET_CODE=1
     fi
     popd
@@ -163,12 +161,7 @@ do
         --catalogd_args=--load_catalog_in_background=false \
         ${TEST_START_CLUSTER_ARGS}
     pushd ${IMPALA_FE_DIR}
-    # quietly resolve dependencies to avoid log spew in jenkins runs
-    if [[ "${USER}" == "jenkins" ]]; then
-      echo "Quietly resolving FE dependencies."
-      mvn -q dependency:resolve
-    fi
-    if ! mvn test -Dtest=JdbcTest; then
+    if ! ${IMPALA_HOME}/bin/mvn-quiet.sh test -Dtest=JdbcTest; then
       TEST_RET_CODE=1
     fi
     popd

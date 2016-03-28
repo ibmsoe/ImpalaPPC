@@ -14,6 +14,8 @@
 
 #include "exec/analytic-eval-node.h"
 
+#include <gutil/strings/substitute.h>
+
 #include "exprs/agg-fn-evaluator.h"
 #include "runtime/buffered-tuple-stream.inline.h"
 #include "runtime/descriptors.h"
@@ -24,6 +26,8 @@
 #include "common/names.h"
 
 static const int MAX_TUPLE_POOL_SIZE = 8 * 1024 * 1024; // 8MB
+
+using namespace strings;
 
 namespace impala {
 
@@ -99,8 +103,8 @@ AnalyticEvalNode::~AnalyticEvalNode() {
   DCHECK(input_stream_ == NULL);
 }
 
-Status AnalyticEvalNode::Init(const TPlanNode& tnode) {
-  RETURN_IF_ERROR(ExecNode::Init(tnode));
+Status AnalyticEvalNode::Init(const TPlanNode& tnode, RuntimeState* state) {
+  RETURN_IF_ERROR(ExecNode::Init(tnode, state));
   DCHECK_EQ(conjunct_ctxs_.size(), 0);
   const TAnalyticNode& analytic_node = tnode.analytic_node;
   bool has_lead_fn = false;
@@ -168,7 +172,9 @@ Status AnalyticEvalNode::Prepare(RuntimeState* state) {
     }
   }
 
-  RETURN_IF_ERROR(state->block_mgr()->RegisterClient(2, mem_tracker(), state, &client_));
+  RETURN_IF_ERROR(state->block_mgr()->RegisterClient(
+      Substitute("AnalyticEvalNode id=$0 ptr=$1", id_, this),
+      2, false, mem_tracker(), state, &client_));
   return Status::OK();
 }
 
@@ -756,7 +762,7 @@ Status AnalyticEvalNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool*
 
   // Transfer resources to the output row batch if enough have accumulated and they're
   // no longer needed by output rows to be returned later.
-  if (prev_pool_last_result_idx_ != -1 &&
+  if (input_stream_ != NULL && prev_pool_last_result_idx_ != -1 &&
       prev_pool_last_result_idx_ < input_stream_->rows_returned() &&
       prev_pool_last_window_idx_ < window_tuples_.front().first) {
     VLOG_FILE << id() << " Transfer prev pool to output batch, "

@@ -23,7 +23,7 @@
 #include "common/init.h"
 #include "exec/hbase-table-scanner.h"
 #include "exec/hbase-table-writer.h"
-#include "runtime/hbase-table-factory.h"
+#include "runtime/hbase-table.h"
 #include "codegen/llvm-codegen.h"
 #include "common/status.h"
 #include "runtime/coordinator.h"
@@ -51,13 +51,13 @@ DECLARE_int32(hs2_port);
 DECLARE_int32(be_port);
 DECLARE_string(principal);
 
-int main(int argc, char** argv) {
+int ImpaladMain(int argc, char** argv) {
   InitCommonRuntime(argc, argv, true);
 
   LlvmCodeGen::InitializeLlvm();
   JniUtil::InitLibhdfs();
   EXIT_IF_ERROR(HBaseTableScanner::Init());
-  EXIT_IF_ERROR(HBaseTableFactory::Init());
+  EXIT_IF_ERROR(HBaseTable::InitJNI());
   EXIT_IF_ERROR(HBaseTableWriter::InitJNI());
   InitFeSupport();
 
@@ -94,4 +94,6 @@ int main(int argc, char** argv) {
   delete be_server;
   delete beeswax_server;
   delete hs2_server;
+
+  return 0;
 }

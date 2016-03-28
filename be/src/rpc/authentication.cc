@@ -52,6 +52,7 @@
 using boost::algorithm::is_any_of;
 using boost::algorithm::replace_all;
 using boost::algorithm::split;
+using boost::algorithm::trim;
 using boost::mt19937;
 using boost::uniform_int;
 using namespace apache::thrift;
@@ -66,8 +67,7 @@ DECLARE_string(krb5_debug_file);
 
 DEFINE_int32(kerberos_reinit_interval, 60,
     "Interval, in minutes, between kerberos ticket renewals.");
-DEFINE_string(sasl_path, "/usr/lib/sasl2:/usr/lib64/sasl2:/usr/local/lib/sasl2:"
-    "/usr/lib/x86_64-linux-gnu/sasl2", "Colon separated list of paths to look for SASL "
+DEFINE_string(sasl_path, "", "Colon separated list of paths to look for SASL "
     "security library plugins.");
 DEFINE_bool(enable_ldap_auth, false,
     "If true, use LDAP authentication for client connections");
@@ -91,6 +91,10 @@ DEFINE_string(ldap_bind_pattern, "", "If set, Impala will try to bind to LDAP wi
      " of <ldap_bind_pattern>, but where the string #UID is replaced by the user ID. Use"
      " to control the bind name precisely; do not set --ldap_domain or --ldap_baseDN with"
      " this option");
+DEFINE_string(internal_principals_whitelist, "hdfs", "(Advanced) Comma-separated list of "
+    " additional usernames authorized to access Impala's internal APIs. Defaults to "
+    "'hdfs' which is the system user that in certain deployments must access "
+    "catalog server APIs.");
 
 namespace impala {
 
@@ -302,7 +306,11 @@ static int SaslGetOption(void* context, const char* plugin_name, const char* opt
 // The "auxprop" plugin interface was intended to be a database service for the "glue"
 // layer between the mechanisms and applications.  We, however, hijack this interface
 // simply in order to provide an audit message prior to that start of authentication.
+#if SASL_VERSION_FULL >= ((2 << 16) | (1 << 8) | 25)
+static int ImpalaAuxpropLookup(void* glob_context, sasl_server_params_t* sparams,
+#else
 static void ImpalaAuxpropLookup(void* glob_context, sasl_server_params_t* sparams,
+#endif
     unsigned int flags, const char* user, unsigned ulen) {
   // This callback is called twice, once with this flag clear, and once with
   // this flag set.  We only want to log this message once, so only log it when
@@ -311,6 +319,9 @@ static void ImpalaAuxpropLookup(void* glob_context, sasl_server_params_t* sparam
     string ustr(user, ulen);
     VLOG(2) << "Attempting to authenticate user \"" << ustr << "\"";
   }
+#if SASL_VERSION_FULL >= ((2 << 16) | (1 << 8) | 25)
+  return SASL_OK;
+#endif
 }
 
 // Singleton structure used to register our auxprop plugin with Sasl
@@ -362,12 +373,11 @@ static int SaslVerifyFile(void* context, const char* file,
   return SASL_OK;
 }
 
-// This callback could be used to authorize or restrict access to certain
-// users.  Currently it is used to log a message that we successfully
-// authenticated with a user on an internal connection.
+// Authorizes authenticated users on an internal connection after validating that the
+// first components of the 'requested_user' and our principal are the same.
 //
 // conn: Sasl connection - Ignored
-// context: Ignored, always NULL
+// context: Always NULL except for testing.
 // requested_user: The identity/username to authorize
 // rlen: Length of above
 // auth_identity: "The identity associated with the secret"
@@ -376,16 +386,51 @@ static int SaslVerifyFile(void* context, const char* file,
 // urlen: Length of above
 // propctx: Auxiliary properties - Ignored
 // Return: SASL_OK
-static int SaslAuthorizeInternal(sasl_conn_t* conn, void* context,
+int SaslAuthorizeInternal(sasl_conn_t* conn, void* context,
     const char* requested_user, unsigned rlen,
     const char* auth_identity, unsigned alen,
     const char* def_realm, unsigned urlen,
     struct propctx* propctx) {
-  // We say "principal" here becase this is for internal communication, and hence
-  // ought always be --principal or --be_principal
-  VLOG(1) << "Successfully authenticated principal \"" << string(requested_user, rlen)
-          << "\" on an internal connection";
-  return SASL_OK;
+  string requested_principal(requested_user, rlen);
+  vector<string> names;
+  split(names, requested_principal, is_any_of("/@"));
+
+  if (names.size() != 3) {
+    LOG(INFO) << "Kerberos principal should be of the form: "
+              << "<service>/<hostname>@<realm> - got: " << requested_user;
+    return SASL_BADAUTH;
+  }
+  SaslAuthProvider* internal_auth_provider;
+  if (context == NULL) {
+    internal_auth_provider = static_cast<SaslAuthProvider*>(
+        AuthManager::GetInstance()->GetInternalAuthProvider());
+  } else {
+    // Branch should only be taken for testing, where context is used to inject an auth
+    // provider.
+    internal_auth_provider = static_cast<SaslAuthProvider*>(context);
+  }
+
+  vector<string> whitelist;
+  split(whitelist, FLAGS_internal_principals_whitelist, is_any_of(","));
+  whitelist.push_back(internal_auth_provider->service_name());
+  for (string& s: whitelist) {
+    trim(s);
+    if (s.empty()) continue;
+    if (names[0] == s) {
+      // We say "principal" here becase this is for internal communication, and hence
+      // ought always be --principal or --be_principal
+      VLOG(1) << "Successfully authenticated principal \"" << requested_principal
+              << "\" on an internal connection";
+      return SASL_OK;
+    }
+  }
+  string expected_names = FLAGS_internal_principals_whitelist.empty() ? "" :
+      Substitute(" or one of $0", FLAGS_internal_principals_whitelist);
+  LOG(INFO) << "Principal \"" << requested_principal << "\" not authenticated. "
+            << "Reason: 'service' does not match from <service>/<hostname>@<realm>.\n"
+            << "Got: " << names[0]
+            << ". Expected: " << internal_auth_provider->service_name() << expected_names;
+  return SASL_BADAUTH;
 }
 
 // This callback could be used to authorize or restrict access to certain
@@ -412,14 +457,12 @@ static int SaslAuthorizeExternal(sasl_conn_t* conn, void* context,
   return SASL_OK;
 }
 
-// Sasl callback - where to look for plugins.  We return the list of possible
-// places the plugins might be; this comes from the sasl_path flag.
-//
-// Places we know they might be:
-// UBUNTU:          /usr/lib/sasl2
-// CENTOS:          /usr/lib64/sasl2
-// custom install:  /usr/local/lib/sasl2
-// UBUNTU:          /usr/lib/x86_64-linux-gnu/sasl2
+// Sasl callback - where to look for plugins.  When SASL is dynamically linked, the plugin
+// path is embedded in the library. However, for backwards compatibility in Impala, we
+// provided the possibility to define a custom SASL plugin path that may override the
+// system default. This function is only used, when the user actively chooses to manually
+// define a custom SASL path, otherwise the automatic path resolution from the SASL
+// library is used.
 //
 // context: Ignored, always NULL
 // path: We return the plugin paths here.
@@ -443,6 +486,10 @@ void SaslAuthProvider::RunKinit(Promise<Status>* first_kinit) {
       keytab_file_, principal_);
 
   bool first_time = true;
+  std::random_device rd;
+  mt19937 generator(rd());
+  uniform_int<> dist(0, 300);
+
   while (true) {
     LOG(INFO) << "Registering " << principal_ << ", keytab file " << keytab_file_;
     string kinit_output;
@@ -466,8 +513,6 @@ void SaslAuthProvider::RunKinit(Promise<Status>* first_kinit) {
     // Sleep for the renewal interval, minus a random time between 0-5 minutes to help
     // avoid a storm at the KDC. Additionally, never sleep less than a minute to
     // reduce KDC stress due to frequent renewals.
-    mt19937 generator;
-    uniform_int<> dist(0, 300);
     SleepForMs(1000 * max((60 * FLAGS_kerberos_reinit_interval) - dist(generator), 60));
   }
 }
@@ -482,22 +527,26 @@ Status InitAuth(const string& appname) {
     GENERAL_CALLBACKS[0].proc = (int (*)())&SaslLogCallback;
     GENERAL_CALLBACKS[0].context = ((void *)"General");
 
-    // Need this here so we can find available mechanisms
-    GENERAL_CALLBACKS[1].id = SASL_CB_GETPATH;
-    GENERAL_CALLBACKS[1].proc = (int (*)())&SaslGetPath;
-    GENERAL_CALLBACKS[1].context = NULL;
+    int arr_offset = 0;
+    if (!FLAGS_sasl_path.empty()) {
+      // Need this here so we can find available mechanisms
+      GENERAL_CALLBACKS[1].id = SASL_CB_GETPATH;
+      GENERAL_CALLBACKS[1].proc = (int (*)())&SaslGetPath;
+      GENERAL_CALLBACKS[1].context = NULL;
+      arr_offset = 1;
+    }
 
     // Allows us to view and set some options
-    GENERAL_CALLBACKS[2].id = SASL_CB_GETOPT;
-    GENERAL_CALLBACKS[2].proc = (int (*)())&SaslGetOption;
-    GENERAL_CALLBACKS[2].context = NULL;
+    GENERAL_CALLBACKS[1 + arr_offset].id = SASL_CB_GETOPT;
+    GENERAL_CALLBACKS[1 + arr_offset].proc = (int (*)())&SaslGetOption;
+    GENERAL_CALLBACKS[1 + arr_offset].context = NULL;
 
     // For curiosity, let's see what files are being touched.
-    GENERAL_CALLBACKS[3].id = SASL_CB_VERIFYFILE;
-    GENERAL_CALLBACKS[3].proc = (int (*)())&SaslVerifyFile;
-    GENERAL_CALLBACKS[3].context = NULL;
+    GENERAL_CALLBACKS[2 + arr_offset].id = SASL_CB_VERIFYFILE;
+    GENERAL_CALLBACKS[2 + arr_offset].proc = (int (*)())&SaslVerifyFile;
+    GENERAL_CALLBACKS[2 + arr_offset].context = NULL;
 
-    GENERAL_CALLBACKS[4].id = SASL_CB_LIST_END;
+    GENERAL_CALLBACKS[3 + arr_offset].id = SASL_CB_LIST_END;
 
     if (!FLAGS_principal.empty()) {
       // Callbacks for when we're a Kerberos Sasl internal connection.  Just do logging.
@@ -596,13 +645,6 @@ Status CheckReplayCacheDirPermissions() {
 
 Status SaslAuthProvider::InitKerberos(const string& principal,
     const string& keytab_file) {
-
-  // Disallow starting Impala with Kerberos and server<->server SSL both enabled at the
-  // same time, which is known to cause hangs (IMPALA-2598).
-  // TODO: Remove when IMPALA-2598 is fixed.
-  if (is_internal_ && EnableInternalSslConnections()) {
-    return Status(TErrorCode::IMPALA_2598_KERBEROS_SSL_DISALLOWED);
-  }
 
   principal_ = principal;
   keytab_file_ = keytab_file;

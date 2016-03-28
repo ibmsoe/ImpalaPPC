@@ -39,6 +39,7 @@
 #include "exprs/decimal-operators.h"
 #include "exprs/hive-udf-call.h"
 #include "exprs/in-predicate.h"
+#include "exprs/is-not-empty-predicate.h"
 #include "exprs/is-null-predicate.h"
 #include "exprs/like-predicate.h"
 #include "exprs/literal.h"
@@ -56,7 +57,6 @@
 #include "gen-cpp/Data_types.h"
 #include "runtime/lib-cache.h"
 #include "runtime/runtime-state.h"
-#include "runtime/raw-value.h"
 #include "udf/udf.h"
 #include "udf/udf-internal.h"
 
@@ -72,7 +72,7 @@ namespace impala {
 
 const char* Expr::LLVM_CLASS_NAME = "class.impala::Expr";
 
-const char* Expr::GET_CONSTANT_SYMBOL_PREFIX = "_ZN6impala4Expr11GetConstant";
+const char* Expr::GET_CONSTANT_INT_SYMBOL_PREFIX = "_ZN6impala4Expr14GetConstantInt";
 
 template<class T>
 bool ParseString(const string& str, T* val) {
@@ -245,11 +245,14 @@ Status Expr::CreateExpr(ObjectPool* pool, const TExprNode& texpr_node, Expr** ex
       } else if (texpr_node.fn.name.function_name == "coalesce") {
         *expr = pool->Add(new CoalesceExpr(texpr_node));
 
-      } else if (texpr_node.fn.binary_type == TFunctionBinaryType::HIVE) {
+      } else if (texpr_node.fn.binary_type == TFunctionBinaryType::JAVA) {
         *expr = pool->Add(new HiveUdfCall(texpr_node));
       } else {
         *expr = pool->Add(new ScalarFnCall(texpr_node));
       }
+      return Status::OK();
+    case TExprNodeType::IS_NOT_EMPTY_PRED:
+      *expr = pool->Add(new IsNotEmptyPredicate(texpr_node));
       return Status::OK();
     default:
       stringstream os;
@@ -443,27 +446,27 @@ int Expr::GetSlotIds(vector<SlotId>* slot_ids) const {
 Function* Expr::GetStaticGetValWrapper(ColumnType type, LlvmCodeGen* codegen) {
   switch (type.type) {
     case TYPE_BOOLEAN:
-      return codegen->GetFunction(IRFunction::EXPR_GET_BOOLEAN_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_BOOLEAN_VAL, false);
     case TYPE_TINYINT:
-      return codegen->GetFunction(IRFunction::EXPR_GET_TINYINT_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_TINYINT_VAL, false);
     case TYPE_SMALLINT:
-      return codegen->GetFunction(IRFunction::EXPR_GET_SMALLINT_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_SMALLINT_VAL, false);
     case TYPE_INT:
-      return codegen->GetFunction(IRFunction::EXPR_GET_INT_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_INT_VAL, false);
     case TYPE_BIGINT:
-      return codegen->GetFunction(IRFunction::EXPR_GET_BIGINT_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_BIGINT_VAL, false);
     case TYPE_FLOAT:
-      return codegen->GetFunction(IRFunction::EXPR_GET_FLOAT_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_FLOAT_VAL, false);
     case TYPE_DOUBLE:
-      return codegen->GetFunction(IRFunction::EXPR_GET_DOUBLE_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_DOUBLE_VAL, false);
     case TYPE_STRING:
     case TYPE_CHAR:
     case TYPE_VARCHAR:
-      return codegen->GetFunction(IRFunction::EXPR_GET_STRING_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_STRING_VAL, false);
     case TYPE_TIMESTAMP:
-      return codegen->GetFunction(IRFunction::EXPR_GET_TIMESTAMP_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_TIMESTAMP_VAL, false);
     case TYPE_DECIMAL:
-      return codegen->GetFunction(IRFunction::EXPR_GET_DECIMAL_VAL);
+      return codegen->GetFunction(IRFunction::EXPR_GET_DECIMAL_VAL, false);
     default:
       DCHECK(false) << "Invalid type: " << type.DebugString();
       return NULL;
@@ -561,42 +564,59 @@ AnyVal* Expr::GetConstVal(ExprContext* context) {
   return constant_val_.get();
 }
 
-
-template<> int Expr::GetConstant(const FunctionContext& ctx, ExprConstant c, int i) {
+int Expr::GetConstantInt(const FunctionContext::TypeDesc& return_type,
+      const std::vector<FunctionContext::TypeDesc>& arg_types, ExprConstant c, int i) {
   switch (c) {
     case RETURN_TYPE_SIZE:
       DCHECK_EQ(i, -1);
-      return AnyValUtil::TypeDescToColumnType(ctx.GetReturnType()).GetByteSize();
+      return AnyValUtil::TypeDescToColumnType(return_type).GetByteSize();
+    case RETURN_TYPE_PRECISION:
+      DCHECK_EQ(i, -1);
+      DCHECK_EQ(return_type.type, FunctionContext::TYPE_DECIMAL);
+      return return_type.precision;
+    case RETURN_TYPE_SCALE:
+      DCHECK_EQ(i, -1);
+      DCHECK_EQ(return_type.type, FunctionContext::TYPE_DECIMAL);
+      return return_type.scale;
     case ARG_TYPE_SIZE:
       DCHECK_GE(i, 0);
-      DCHECK_LT(i, ctx.GetNumArgs());
-      return AnyValUtil::TypeDescToColumnType(*ctx.GetArgType(i)).GetByteSize();
+      DCHECK_LT(i, arg_types.size());
+      return AnyValUtil::TypeDescToColumnType(arg_types[i]).GetByteSize();
+    case ARG_TYPE_PRECISION:
+      DCHECK_GE(i, 0);
+      DCHECK_LT(i, arg_types.size());
+      DCHECK_EQ(arg_types[i].type, FunctionContext::TYPE_DECIMAL);
+      return arg_types[i].precision;
+    case ARG_TYPE_SCALE:
+      DCHECK_GE(i, 0);
+      DCHECK_LT(i, arg_types.size());
+      DCHECK_EQ(arg_types[i].type, FunctionContext::TYPE_DECIMAL);
+      return arg_types[i].scale;
     default:
       CHECK(false) << "NYI";
       return -1;
   }
 }
 
-Value* Expr::GetIrConstant(LlvmCodeGen* codegen, ExprConstant c, int i) {
-  switch (c) {
-    case RETURN_TYPE_SIZE:
-      DCHECK_EQ(i, -1);
-      return ConstantInt::get(codegen->GetType(TYPE_INT), type_.GetByteSize());
-    case ARG_TYPE_SIZE:
-      DCHECK_GE(i, 0);
-      DCHECK_LT(i, children_.size());
-      return ConstantInt::get(
-          codegen->GetType(TYPE_INT), children_[i]->type_.GetByteSize());
-    default:
-      CHECK(false) << "NYI";
-      return NULL;
-  }
+int Expr::GetConstantInt(const FunctionContext& ctx, ExprConstant c, int i) {
+  return GetConstantInt(ctx.GetReturnType(), ctx.impl()->arg_types(), c, i);
 }
 
 int Expr::InlineConstants(LlvmCodeGen* codegen, Function* fn) {
+  FunctionContext::TypeDesc return_type = AnyValUtil::ColumnTypeToTypeDesc(type_);
+  vector<FunctionContext::TypeDesc> arg_types;
+  for (int i = 0; i < children_.size(); ++i) {
+    arg_types.push_back(AnyValUtil::ColumnTypeToTypeDesc(children_[i]->type_));
+  }
+  return InlineConstants(return_type, arg_types, codegen, fn);
+}
+
+int Expr::InlineConstants(const FunctionContext::TypeDesc& return_type,
+      const std::vector<FunctionContext::TypeDesc>& arg_types, LlvmCodeGen* codegen,
+      Function* fn) {
   int replaced = 0;
   for (inst_iterator iter = inst_begin(fn), end = inst_end(fn); iter != end; ) {
-    // Increment iter now so we don't mess it up modifying the instrunction below
+    // Increment iter now so we don't mess it up modifying the instruction below
     Instruction* instr = &*(iter++);
 
     // Look for call instructions
@@ -604,20 +624,24 @@ int Expr::InlineConstants(LlvmCodeGen* codegen, Function* fn) {
     CallInst* call_instr = cast<CallInst>(instr);
     Function* called_fn = call_instr->getCalledFunction();
 
-    // Look for call to Expr::GetConstant()
+    // Look for call to Expr::GetConstant*()
     if (called_fn == NULL ||
-        called_fn->getName().find(GET_CONSTANT_SYMBOL_PREFIX) == string::npos) continue;
+        called_fn->getName().find(GET_CONSTANT_INT_SYMBOL_PREFIX) == string::npos) {
+      continue;
+    }
 
     // 'c' and 'i' arguments must be constant
     ConstantInt* c_arg = dyn_cast<ConstantInt>(call_instr->getArgOperand(1));
     ConstantInt* i_arg = dyn_cast<ConstantInt>(call_instr->getArgOperand(2));
-    DCHECK(c_arg != NULL) << "Non-constant 'c' argument to Expr::GetConstant()";
-    DCHECK(i_arg != NULL) << "Non-constant 'i' argument to Expr::GetConstant()";
+    DCHECK(c_arg != NULL) << "Non-constant 'c' argument to Expr::GetConstant*()";
+    DCHECK(i_arg != NULL) << "Non-constant 'i' argument to Expr::GetConstant*()";
 
     // Replace the called function with the appropriate constant
     ExprConstant c_val = static_cast<ExprConstant>(c_arg->getSExtValue());
     int i_val = static_cast<int>(i_arg->getSExtValue());
-    call_instr->replaceAllUsesWith(GetIrConstant(codegen, c_val, i_val));
+    // All supported constants are currently integers.
+    call_instr->replaceAllUsesWith(ConstantInt::get(codegen->GetType(TYPE_INT),
+          GetConstantInt(return_type, arg_types, c_val, i_val)));
     call_instr->eraseFromParent();
     ++replaced;
   }

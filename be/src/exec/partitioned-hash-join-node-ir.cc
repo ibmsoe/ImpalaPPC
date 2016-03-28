@@ -45,11 +45,12 @@ int PartitionedHashJoinNode::ProcessProbeBatch(
   const int num_conjuncts = conjunct_ctxs_.size();
 
   DCHECK(!out_batch->AtCapacity());
+  DCHECK_GE(probe_batch_pos_, 0);
   TupleRow* out_row = out_batch->GetRow(out_batch->AddRow());
   const int max_rows = out_batch->capacity() - out_batch->num_rows();
   int num_rows_added = 0;
 
-  while (probe_batch_pos_ >= 0) {
+  while (true) {
     if (current_probe_row_ != NULL) {
       while (!hash_tbl_iterator_.AtEnd()) {
         TupleRow* matched_build_row = hash_tbl_iterator_.GetRow();
@@ -199,7 +200,7 @@ next_row:
     }
     const uint32_t partition_idx = hash >> (32 - NUM_PARTITIONING_BITS);
     if (LIKELY(hash_tbls_[partition_idx] != NULL)) {
-      hash_tbl_iterator_= hash_tbls_[partition_idx]->Find(ht_ctx, hash);
+      hash_tbl_iterator_= hash_tbls_[partition_idx]->FindProbeRow(ht_ctx, hash);
     } else {
       Partition* partition = hash_partitions_[partition_idx];
       if (UNLIKELY(partition->is_closed())) {

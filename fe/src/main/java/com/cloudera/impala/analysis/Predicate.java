@@ -24,7 +24,7 @@ public abstract class Predicate extends Expr {
 
   public Predicate() {
     super();
-    this.isEqJoinConjunct_ = false;
+    isEqJoinConjunct_ = false;
   }
 
   /**
@@ -74,6 +74,11 @@ public abstract class Predicate extends Expr {
     if (slotRefRef != null) slotRefRef.setRef(slotRef);
     if (idxRef != null) idxRef.setRef(Integer.valueOf(i));
     return true;
+  }
+
+  public static boolean isEquivalencePredicate(Expr expr) {
+    return (expr instanceof BinaryPredicate)
+        && ((BinaryPredicate) expr).getOp().isEquivalence();
   }
 
   /**

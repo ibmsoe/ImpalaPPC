@@ -32,8 +32,8 @@ SortNode::SortNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl
 SortNode::~SortNode() {
 }
 
-Status SortNode::Init(const TPlanNode& tnode) {
-  RETURN_IF_ERROR(ExecNode::Init(tnode));
+Status SortNode::Init(const TPlanNode& tnode, RuntimeState* state) {
+  RETURN_IF_ERROR(ExecNode::Init(tnode, state));
   RETURN_IF_ERROR(sort_exec_exprs_.Init(tnode.sort_node.sort_info, pool_));
   is_asc_order_ = tnode.sort_node.sort_info.is_asc_order;
   nulls_first_ = tnode.sort_node.sort_info.nulls_first;
@@ -46,6 +46,20 @@ Status SortNode::Prepare(RuntimeState* state) {
   RETURN_IF_ERROR(sort_exec_exprs_.Prepare(
       state, child(0)->row_desc(), row_descriptor_, expr_mem_tracker()));
   AddExprCtxsToFree(sort_exec_exprs_);
+  TupleRowComparator less_than(sort_exec_exprs_, is_asc_order_, nulls_first_);
+
+  bool codegen_enabled = false;
+  Status codegen_status;
+  if (state->codegen_enabled()) {
+    codegen_status = less_than.Codegen(state);
+    codegen_enabled = codegen_status.ok();
+  }
+  AddCodegenExecOption(codegen_enabled, codegen_status);
+
+  sorter_.reset(new Sorter(
+      less_than, sort_exec_exprs_.sort_tuple_slot_expr_ctxs(),
+      &row_descriptor_, mem_tracker(), runtime_profile(), state));
+  RETURN_IF_ERROR(sorter_->Init());
   return Status::OK();
 }
 
@@ -56,17 +70,6 @@ Status SortNode::Open(RuntimeState* state) {
   RETURN_IF_CANCELLED(state);
   RETURN_IF_ERROR(QueryMaintenance(state));
   RETURN_IF_ERROR(child(0)->Open(state));
-
-  // These objects must be created after opening the sort_exec_exprs_. Avoid creating
-  // them after every Reset()/Open().
-  if (sorter_.get() == NULL) {
-    TupleRowComparator less_than(sort_exec_exprs_, is_asc_order_, nulls_first_);
-    // Create and initialize the external sort impl object
-    sorter_.reset(new Sorter(
-        less_than, sort_exec_exprs_.sort_tuple_slot_expr_ctxs(),
-        &row_descriptor_, mem_tracker(), runtime_profile(), state));
-    RETURN_IF_ERROR(sorter_->Init());
-  }
 
   // The child has been opened and the sorter created. Sort the input.
   // The final merge is done on-demand as rows are requested in GetNext().

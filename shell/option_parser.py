@@ -143,6 +143,10 @@ def get_option_parser(defaults):
                     "may be used with an insecure connection to Impala. " +
                     "WARNING: Authentication credentials will therefore be sent " +
                     "unencrypted, and may be vulnerable to attack.")
+  parser.add_option("--ldap_password_cmd",
+                    help="Shell command to run to retrieve the LDAP password")
+  parser.add_option("--var", dest="keyval", action="append",
+                    help="Define variable(s) to be used within the Impala session.")
 
   # add default values to the help text
   for option in parser.option_list:

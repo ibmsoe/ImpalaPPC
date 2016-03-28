@@ -19,7 +19,6 @@
 #include "exprs/expr.h"
 #include "runtime/descriptors.h"
 #include "runtime/mem-pool.h"
-#include "runtime/raw-value.h"
 #include "runtime/row-batch.h"
 #include "runtime/runtime-state.h"
 #include "runtime/tuple.h"
@@ -46,8 +45,8 @@ TopNNode::TopNNode(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl
     priority_queue_(NULL) {
 }
 
-Status TopNNode::Init(const TPlanNode& tnode) {
-  RETURN_IF_ERROR(ExecNode::Init(tnode));
+Status TopNNode::Init(const TPlanNode& tnode, RuntimeState* state) {
+  RETURN_IF_ERROR(ExecNode::Init(tnode, state));
   RETURN_IF_ERROR(sort_exec_exprs_.Init(tnode.sort_node.sort_info, pool_));
   is_asc_order_ = tnode.sort_node.sort_info.is_asc_order;
   nulls_first_ = tnode.sort_node.sort_info.nulls_first;
@@ -67,10 +66,16 @@ Status TopNNode::Prepare(RuntimeState* state) {
   AddExprCtxsToFree(sort_exec_exprs_);
   tuple_row_less_than_.reset(
       new TupleRowComparator(sort_exec_exprs_, is_asc_order_, nulls_first_));
+  bool codegen_enabled = false;
+  Status codegen_status;
   if (state->codegen_enabled()) {
-    bool success = tuple_row_less_than_->Codegen(state);
-    if (success) AddRuntimeExecOption("Codegen Enabled");
+    codegen_status = tuple_row_less_than_->Codegen(state);
+    codegen_enabled = codegen_status.ok();
   }
+  AddCodegenExecOption(codegen_enabled, codegen_status);
+  priority_queue_.reset(
+      new priority_queue<Tuple*, vector<Tuple*>, TupleRowComparator>(
+          *tuple_row_less_than_));
   materialized_tuple_desc_ = row_descriptor_.tuple_descriptors()[0];
   return Status::OK();
 }
@@ -82,14 +87,6 @@ Status TopNNode::Open(RuntimeState* state) {
   RETURN_IF_ERROR(QueryMaintenance(state));
   RETURN_IF_ERROR(sort_exec_exprs_.Open(state));
 
-  // Avoid creating them after every Reset()/Open().
-  // TODO: For some reason initializing priority_queue_ in Prepare() causes a 30% perf
-  // regression. Why??
-  if (priority_queue_.get() == NULL) {
-    priority_queue_.reset(
-        new priority_queue<Tuple*, vector<Tuple*>, TupleRowComparator>(
-            *tuple_row_less_than_));
-  }
   // Allocate memory for a temporary tuple.
   tmp_tuple_ = reinterpret_cast<Tuple*>(
       tuple_pool_->Allocate(materialized_tuple_desc_->byte_size()));

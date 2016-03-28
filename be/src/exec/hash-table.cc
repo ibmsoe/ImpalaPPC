@@ -14,6 +14,10 @@
 
 #include "exec/hash-table.inline.h"
 
+#include <functional>
+#include <numeric>
+#include <gutil/strings/substitute.h>
+
 #include "codegen/codegen-anyval.h"
 #include "codegen/llvm-codegen.h"
 #include "exprs/expr.h"
@@ -21,7 +25,7 @@
 #include "exprs/slot-ref.h"
 #include "runtime/buffered-block-mgr.h"
 #include "runtime/mem-tracker.h"
-#include "runtime/raw-value.h"
+#include "runtime/raw-value.inline.h"
 #include "runtime/runtime-state.h"
 #include "runtime/string-value.inline.h"
 #include "util/debug-util.h"
@@ -31,6 +35,7 @@
 
 using namespace impala;
 using namespace llvm;
+using namespace strings;
 
 DEFINE_bool(enable_quadratic_probing, true, "Enable quadratic probing hash table");
 
@@ -77,17 +82,22 @@ static int64_t NULL_VALUE[] = { HashUtil::FNV_SEED, HashUtil::FNV_SEED,
 static const int64_t INITIAL_DATA_PAGE_SIZES[] = { 64 * 1024, 512 * 1024 };
 static const int NUM_SMALL_DATA_PAGES = sizeof(INITIAL_DATA_PAGE_SIZES) / sizeof(int64_t);
 
-HashTableCtx::HashTableCtx(const vector<ExprContext*>& build_expr_ctxs,
-    const vector<ExprContext*>& probe_expr_ctxs, bool stores_nulls, bool finds_nulls,
-    int32_t initial_seed, int max_levels, int num_build_tuples)
+HashTableCtx::HashTableCtx(const std::vector<ExprContext*>& build_expr_ctxs,
+    const std::vector<ExprContext*>& probe_expr_ctxs, bool stores_nulls,
+    const std::vector<bool>& finds_nulls, int32_t initial_seed,
+    int max_levels, int num_build_tuples)
     : build_expr_ctxs_(build_expr_ctxs),
       probe_expr_ctxs_(probe_expr_ctxs),
       stores_nulls_(stores_nulls),
       finds_nulls_(finds_nulls),
+      finds_some_nulls_(std::accumulate(
+          finds_nulls_.begin(), finds_nulls_.end(), false, std::logical_or<bool>())),
       level_(0),
       row_(reinterpret_cast<TupleRow*>(malloc(sizeof(Tuple*) * num_build_tuples))) {
+  DCHECK(!finds_some_nulls_ || stores_nulls_);
   // Compute the layout and buffer size to store the evaluated expr results
   DCHECK_EQ(build_expr_ctxs_.size(), probe_expr_ctxs_.size());
+  DCHECK_EQ(build_expr_ctxs_.size(), finds_nulls_.size());
   DCHECK(!build_expr_ctxs_.empty());
   results_buffer_size_ = Expr::ComputeResultsLayout(build_expr_ctxs_,
       &expr_values_buffer_offsets_, &var_result_begin_);
@@ -166,11 +176,12 @@ uint32_t HashTableCtx::HashVariableLenRow() {
   return hash;
 }
 
+template<bool FORCE_NULL_EQUALITY>
 bool HashTableCtx::Equals(TupleRow* build_row) {
   for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
     void* val = build_expr_ctxs_[i]->GetValue(build_row);
     if (val == NULL) {
-      if (!stores_nulls_) return false;
+      if (!(FORCE_NULL_EQUALITY || finds_nulls_[i])) return false;
       if (!expr_value_null_bits_[i]) return false;
       continue;
     } else {
@@ -184,6 +195,9 @@ bool HashTableCtx::Equals(TupleRow* build_row) {
   }
   return true;
 }
+
+template bool HashTableCtx::Equals<true>(TupleRow* build_row);
+template bool HashTableCtx::Equals<false>(TupleRow* build_row);
 
 const double HashTable::MAX_FILL_FACTOR = 0.75f;
 
@@ -251,10 +265,6 @@ void HashTable::Close() {
   state_->block_mgr()->ReleaseMemory(block_mgr_client_, num_buckets_ * sizeof(Bucket));
 }
 
-int64_t HashTable::CurrentMemSize() const {
-  return num_buckets_ * sizeof(Bucket) + num_duplicate_nodes_ * sizeof(DuplicateNode);
-}
-
 bool HashTable::CheckAndResize(uint64_t buckets_to_fill, HashTableCtx* ht_ctx) {
   uint64_t shift = 0;
   while (num_filled_buckets_ + buckets_to_fill >
@@ -295,8 +305,8 @@ bool HashTable::ResizeBuckets(int64_t num_buckets, HashTableCtx* ht_ctx) {
        NextFilledBucket(&iter.bucket_idx_, &iter.node_)) {
     Bucket* bucket_to_copy = &buckets_[iter.bucket_idx_];
     bool found = false;
-    int64_t bucket_idx = Probe(new_buckets, num_buckets, NULL, bucket_to_copy->hash,
-                               &found);
+    int64_t bucket_idx =
+        Probe<true>(new_buckets, num_buckets, NULL, bucket_to_copy->hash, &found);
     DCHECK(!found);
     DCHECK_NE(bucket_idx, Iterator::BUCKET_NOT_FOUND) << " Probe failed even though "
         " there are free buckets. " << num_buckets << " " << num_filled_buckets_;
@@ -425,7 +435,8 @@ static void CodegenAssignNullValue(LlvmCodeGen* codegen,
       case TYPE_SMALLINT:
       case TYPE_INT:
       case TYPE_BIGINT:
-        null_value = codegen->GetIntConstant(type.type, fvn_seed);
+      case TYPE_DECIMAL:
+        null_value = codegen->GetIntConstant(type.GetByteSize(), fvn_seed);
         break;
       case TYPE_FLOAT: {
         // Don't care about the value, just the bit pattern
@@ -476,16 +487,19 @@ static void CodegenAssignNullValue(LlvmCodeGen* codegen,
 // Both the null and not null branch into the continue block.  The continue block
 // becomes the start of the next block for codegen (either the next expr or just the
 // end of the function).
-Function* HashTableCtx::CodegenEvalRow(RuntimeState* state, bool build) {
+Status HashTableCtx::CodegenEvalRow(RuntimeState* state, bool build, Function** fn) {
   // TODO: CodegenAssignNullValue() can't handle TYPE_TIMESTAMP or TYPE_DECIMAL yet
   const vector<ExprContext*>& ctxs = build ? build_expr_ctxs_ : probe_expr_ctxs_;
   for (int i = 0; i < ctxs.size(); ++i) {
     PrimitiveType type = ctxs[i]->root()->type().type;
-    if (type == TYPE_TIMESTAMP || type == TYPE_DECIMAL || type == TYPE_CHAR) return NULL;
+    if (type == TYPE_TIMESTAMP || type == TYPE_CHAR) {
+      return Status(Substitute("HashTableCtx::CodegenEvalRow(): type $0 NYI",
+          TypeToString(type)));
+    }
   }
 
   LlvmCodeGen* codegen;
-  if (!state->GetCodegen(&codegen).ok()) return NULL;
+  RETURN_IF_ERROR(state->GetCodegen(&codegen));
 
   // Get types to generate function prototype
   Type* tuple_row_type = codegen->GetType(TupleRow::LLVM_CLASS_NAME);
@@ -504,7 +518,7 @@ Function* HashTableCtx::CodegenEvalRow(RuntimeState* state, bool build) {
   LLVMContext& context = codegen->context();
   LlvmCodeGen::LlvmBuilder builder(context);
   Value* args[2];
-  Function* fn = prototype.GeneratePrototype(&builder, args);
+  *fn = prototype.GeneratePrototype(&builder, args);
 
   Value* row = args[1];
   Value* has_null = codegen->false_value();
@@ -518,17 +532,18 @@ Function* HashTableCtx::CodegenEvalRow(RuntimeState* state, bool build) {
     Value* llvm_loc = codegen->CastPtrToLlvmPtr(
         codegen->GetPtrType(ctxs[i]->root()->type()), loc);
 
-    BasicBlock* null_block = BasicBlock::Create(context, "null", fn);
-    BasicBlock* not_null_block = BasicBlock::Create(context, "not_null", fn);
-    BasicBlock* continue_block = BasicBlock::Create(context, "continue", fn);
+    BasicBlock* null_block = BasicBlock::Create(context, "null", *fn);
+    BasicBlock* not_null_block = BasicBlock::Create(context, "not_null", *fn);
+    BasicBlock* continue_block = BasicBlock::Create(context, "continue", *fn);
 
     // Call expr
     Function* expr_fn;
     Status status = ctxs[i]->root()->GetCodegendComputeFn(state, &expr_fn);
     if (!status.ok()) {
-      VLOG_QUERY << "Problem with CodegenEvalRow: " << status.GetDetail();
-      fn->eraseFromParent(); // deletes function
-      return NULL;
+      (*fn)->eraseFromParent(); // deletes function
+      *fn = NULL;
+      return Status(Substitute("Problem with HashTableCtx::CodegenEvalRow(): $0",
+          status.GetDetail()));
     }
 
     Value* ctx_arg = codegen->CastPtrToLlvmPtr(
@@ -574,7 +589,12 @@ Function* HashTableCtx::CodegenEvalRow(RuntimeState* state, bool build) {
   }
   builder.CreateRet(has_null);
 
-  return codegen->FinalizeFunction(fn);
+  *fn = codegen->FinalizeFunction(*fn);
+  if (*fn == NULL) {
+    return Status("Codegen'd HashTableCtx::EvalRow() function failed verification, "
+        "see log");
+  }
+  return Status::OK();
 }
 
 // Codegen for hashing the current row.  In the case with both string and non-string data
@@ -604,14 +624,17 @@ Function* HashTableCtx::CodegenEvalRow(RuntimeState* state, bool build) {
 //   call void @set_hash(%"class.impala::HashTableCtx"* %this_ptr, i32 %7)
 //   ret i32 %7
 // }
-Function* HashTableCtx::CodegenHashCurrentRow(RuntimeState* state, bool use_murmur) {
+Status HashTableCtx::CodegenHashCurrentRow(RuntimeState* state, bool use_murmur,
+    Function** fn) {
   for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
     // Disable codegen for CHAR
-    if (build_expr_ctxs_[i]->root()->type().type == TYPE_CHAR) return NULL;
+    if (build_expr_ctxs_[i]->root()->type().type == TYPE_CHAR) {
+      return Status("HashTableCtx::CodegenHashCurrentRow(): CHAR NYI");
+    }
   }
 
   LlvmCodeGen* codegen;
-  if (!state->GetCodegen(&codegen).ok()) return NULL;
+  RETURN_IF_ERROR(state->GetCodegen(&codegen));
 
   // Get types to generate function prototype
   Type* this_type = codegen->GetType(HashTableCtx::LLVM_CLASS_NAME);
@@ -626,10 +649,11 @@ Function* HashTableCtx::CodegenHashCurrentRow(RuntimeState* state, bool use_murm
   LLVMContext& context = codegen->context();
   LlvmCodeGen::LlvmBuilder builder(context);
   Value* this_arg;
-  Function* fn = prototype.GeneratePrototype(&builder, &this_arg);
+  *fn = prototype.GeneratePrototype(&builder, &this_arg);
 
   // Call GetHashSeed() to get seeds_[level_]
-  Function* get_hash_seed_fn = codegen->GetFunction(IRFunction::HASH_TABLE_GET_HASH_SEED);
+  Function* get_hash_seed_fn =
+      codegen->GetFunction(IRFunction::HASH_TABLE_GET_HASH_SEED, false);
   Value* seed = builder.CreateCall(get_hash_seed_fn, this_arg, "seed");
 
   Value* hash_result = seed;
@@ -667,9 +691,9 @@ Function* HashTableCtx::CodegenHashCurrentRow(RuntimeState* state, bool use_murm
       // If the hash table stores nulls, we need to check if the stringval
       // evaluated to NULL
       if (stores_nulls_) {
-        null_block = BasicBlock::Create(context, "null", fn);
-        not_null_block = BasicBlock::Create(context, "not_null", fn);
-        continue_block = BasicBlock::Create(context, "continue", fn);
+        null_block = BasicBlock::Create(context, "null", *fn);
+        not_null_block = BasicBlock::Create(context, "not_null", *fn);
+        continue_block = BasicBlock::Create(context, "continue", *fn);
 
         uint8_t* null_byte_loc = &expr_value_null_bits_[i];
         Value* llvm_null_byte_loc =
@@ -724,7 +748,12 @@ Function* HashTableCtx::CodegenHashCurrentRow(RuntimeState* state, bool use_murm
   }
 
   builder.CreateRet(hash_result);
-  return codegen->FinalizeFunction(fn);
+  *fn = codegen->FinalizeFunction(*fn);
+  if (*fn == NULL) {
+    return Status("Codegen'd HashTableCtx::HashCurrentRow() function failed "
+        "verification, see log");
+  }
+  return Status::OK();
 }
 
 // Codegen for HashTableCtx::Equals.  For a hash table with two exprs (string,int),
@@ -777,14 +806,17 @@ Function* HashTableCtx::CodegenHashCurrentRow(RuntimeState* state, bool use_murm
 // continue3:                                        ; preds = %not_null2, %null1
 //   ret i1 true
 // }
-Function* HashTableCtx::CodegenEquals(RuntimeState* state) {
+Status HashTableCtx::CodegenEquals(RuntimeState* state, bool force_null_equality,
+    Function** fn) {
   for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
     // Disable codegen for CHAR
-    if (build_expr_ctxs_[i]->root()->type().type == TYPE_CHAR) return NULL;
+    if (build_expr_ctxs_[i]->root()->type().type == TYPE_CHAR) {
+      return Status("HashTableCtx::CodegenEquals(): CHAR NYI");
+    }
   }
 
   LlvmCodeGen* codegen;
-  if (!state->GetCodegen(&codegen).ok()) return NULL;
+  RETURN_IF_ERROR(state->GetCodegen(&codegen));
   // Get types to generate function prototype
   Type* tuple_row_type = codegen->GetType(TupleRow::LLVM_CLASS_NAME);
   DCHECK(tuple_row_type != NULL);
@@ -801,22 +833,23 @@ Function* HashTableCtx::CodegenEquals(RuntimeState* state) {
   LLVMContext& context = codegen->context();
   LlvmCodeGen::LlvmBuilder builder(context);
   Value* args[2];
-  Function* fn = prototype.GeneratePrototype(&builder, args);
+  *fn = prototype.GeneratePrototype(&builder, args);
   Value* row = args[1];
 
-  BasicBlock* false_block = BasicBlock::Create(context, "false_block", fn);
+  BasicBlock* false_block = BasicBlock::Create(context, "false_block", *fn);
   for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
-    BasicBlock* null_block = BasicBlock::Create(context, "null", fn);
-    BasicBlock* not_null_block = BasicBlock::Create(context, "not_null", fn);
-    BasicBlock* continue_block = BasicBlock::Create(context, "continue", fn);
+    BasicBlock* null_block = BasicBlock::Create(context, "null", *fn);
+    BasicBlock* not_null_block = BasicBlock::Create(context, "not_null", *fn);
+    BasicBlock* continue_block = BasicBlock::Create(context, "continue", *fn);
 
     // call GetValue on build_exprs[i]
     Function* expr_fn;
     Status status = build_expr_ctxs_[i]->root()->GetCodegendComputeFn(state, &expr_fn);
     if (!status.ok()) {
-      VLOG_QUERY << "Problem with CodegenEquals: " << status.GetDetail();
-      fn->eraseFromParent(); // deletes function
-      return NULL;
+      (*fn)->eraseFromParent(); // deletes function
+      *fn = NULL;
+      return Status(Substitute("Problem with HashTableCtx::CodegenEquals: $0",
+          status.GetDetail()));
     }
 
     Value* ctx_arg = codegen->CastPtrToLlvmPtr(
@@ -826,21 +859,24 @@ Function* HashTableCtx::CodegenEquals(RuntimeState* state) {
         build_expr_ctxs_[i]->root()->type(), expr_fn, expr_fn_args, "result");
     Value* is_null = result.GetIsNull();
 
-    // Determine if probe is null (i.e. expr_value_null_bits_[i] == true). In
+    // Determine if row is null (i.e. expr_value_null_bits_[i] == true). In
     // the case where the hash table does not store nulls, this is always false.
-    Value* probe_is_null = codegen->false_value();
+    Value* row_is_null = codegen->false_value();
     uint8_t* null_byte_loc = &expr_value_null_bits_[i];
-    if (stores_nulls_) {
+
+    // We consider null values equal if we are comparing build rows or if the join
+    // predicate is <=>
+    if (force_null_equality || finds_nulls_[i]) {
       Value* llvm_null_byte_loc =
           codegen->CastPtrToLlvmPtr(codegen->ptr_type(), null_byte_loc);
       Value* null_byte = builder.CreateLoad(llvm_null_byte_loc);
-      probe_is_null = builder.CreateICmpNE(null_byte,
+      row_is_null = builder.CreateICmpNE(null_byte,
                                            codegen->GetIntConstant(TYPE_TINYINT, 0));
     }
 
-    // Get llvm value for probe_val from 'expr_values_buffer_'
+    // Get llvm value for row_val from 'expr_values_buffer_'
     void* loc = expr_values_buffer_ + expr_values_buffer_offsets_[i];
-    Value* probe_val = codegen->CastPtrToLlvmPtr(
+    Value* row_val = codegen->CastPtrToLlvmPtr(
         codegen->GetPtrType(build_expr_ctxs_[i]->root()->type()), loc);
 
     // Branch for GetValue() returning NULL
@@ -848,18 +884,18 @@ Function* HashTableCtx::CodegenEquals(RuntimeState* state) {
 
     // Null block
     builder.SetInsertPoint(null_block);
-    builder.CreateCondBr(probe_is_null, continue_block, false_block);
+    builder.CreateCondBr(row_is_null, continue_block, false_block);
 
     // Not-null block
     builder.SetInsertPoint(not_null_block);
     if (stores_nulls_) {
-      BasicBlock* cmp_block = BasicBlock::Create(context, "cmp", fn);
-      // First need to compare that probe expr[i] is not null
-      builder.CreateCondBr(probe_is_null, false_block, cmp_block);
+      BasicBlock* cmp_block = BasicBlock::Create(context, "cmp", *fn);
+      // First need to compare that row expr[i] is not null
+      builder.CreateCondBr(row_is_null, false_block, cmp_block);
       builder.SetInsertPoint(cmp_block);
     }
-    // Check result == probe_val
-    Value* is_equal = result.EqToNativePtr(probe_val);
+    // Check result == row_val
+    Value* is_equal = result.EqToNativePtr(row_val);
     builder.CreateCondBr(is_equal, continue_block, false_block);
 
     builder.SetInsertPoint(continue_block);
@@ -869,5 +905,10 @@ Function* HashTableCtx::CodegenEquals(RuntimeState* state) {
   builder.SetInsertPoint(false_block);
   builder.CreateRet(codegen->false_value());
 
-  return codegen->FinalizeFunction(fn);
+  *fn = codegen->FinalizeFunction(*fn);
+  if (*fn == NULL) {
+    return Status("Codegen'd HashTableCtx::Equals() function failed verification, "
+        "see log");
+  }
+  return Status::OK();
 }

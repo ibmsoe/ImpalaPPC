@@ -14,30 +14,20 @@
 
 package com.cloudera.impala.service;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.URL;
-import java.net.URLConnection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
-import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.hdfs.HAUtil;
 import org.apache.log4j.Appender;
 import org.apache.log4j.FileAppender;
 import org.apache.thrift.TException;
@@ -348,14 +338,20 @@ public class JniFrontend {
     TGetFunctionsResult result = new TGetFunctionsResult();
     List<String> signatures = Lists.newArrayList();
     List<String> retTypes = Lists.newArrayList();
+    List<String> fnBinaryTypes = Lists.newArrayList();
+    List<String> fnIsPersistent = Lists.newArrayList();
     List<Function> fns = frontend_.getFunctions(params.category, params.db,
         params.pattern, false);
     for (Function fn: fns) {
       signatures.add(fn.signatureString());
       retTypes.add(fn.getReturnType().toString());
+      fnBinaryTypes.add(fn.getBinaryType().name());
+      fnIsPersistent.add(String.valueOf(fn.isPersistent()));
     }
     result.setFn_signatures(signatures);
     result.setFn_ret_types(retTypes);
+    result.setFn_binary_types(fnBinaryTypes);
+    result.setFn_persistence(fnIsPersistent);
     TSerializer serializer = new TSerializer(protocolFactory_);
     try {
       return serializer.serialize(result);
@@ -514,7 +510,7 @@ public class JniFrontend {
   }
 
   public void setCatalogInitialized() {
-    frontend_.getCatalog().setIsReady();
+    frontend_.getCatalog().setIsReady(true);
   }
 
   // Caching this saves ~50ms per call to getHadoopConfigAsHtml

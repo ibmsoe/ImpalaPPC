@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 from os.path import isfile, isdir
 from tests.common.test_dimensions import TableFormatInfo
+from textwrap import dedent
 
 LOG = logging.getLogger('impala_test_suite')
 
@@ -77,7 +78,7 @@ def parse_query_test_file(file_name, valid_section_names=None, encoding=None):
   section_names = valid_section_names
   if section_names is None:
     section_names = ['QUERY', 'RESULTS', 'TYPES', 'LABELS', 'SETUP', 'CATCH', 'ERRORS',
-        'USER']
+                     'USER', 'RUNTIME_PROFILE']
   return parse_test_file(file_name, section_names, encoding=encoding,
       skip_unknown_sections=False)
 
@@ -85,6 +86,7 @@ def parse_table_constraints(constraints_file):
   """Reads a table contraints file, if one exists"""
   schema_include = defaultdict(list)
   schema_exclude = defaultdict(list)
+  schema_only = defaultdict(list)
   if not isfile(constraints_file):
     LOG.info('No schema constraints file file found')
   else:
@@ -96,7 +98,13 @@ def parse_table_constraints(constraints_file):
         # Format: table_name:<name>, constraint_type:<type>, table_format:<t1>,<t2>,...
         table_name, constraint_type, table_formats =\
             [value.split(':')[1].strip() for value in line.split(',', 2)]
-        if constraint_type == 'restrict_to':
+
+        # 'only' constraint -- If a format defines an only constraint, only those tables
+        # collected for the same table_format will be created.
+        if constraint_type == 'only':
+          for f in map(parse_table_format_constraint, table_formats.split(',')):
+            schema_only[f].append(table_name.lower())
+        elif constraint_type == 'restrict_to':
           schema_include[table_name.lower()] +=\
               map(parse_table_format_constraint, table_formats.split(','))
         elif constraint_type == 'exclude':
@@ -104,7 +112,7 @@ def parse_table_constraints(constraints_file):
               map(parse_table_format_constraint, table_formats.split(','))
         else:
           raise ValueError, 'Unknown constraint type: %s' % constraint_type
-  return schema_include, schema_exclude
+  return schema_include, schema_exclude, schema_only
 
 def parse_table_format_constraint(table_format_constraint):
   # TODO: Expand how we parse table format constraints to support syntax such as
@@ -138,7 +146,16 @@ def parse_test_file_text(text, valid_section_names, skip_unknown_sections=True):
   section_start_regex = re.compile(r'(?m)^%s' % SECTION_DELIMITER)
   match = section_start_regex.search(text)
   if match is not None:
-    # Assume anything before the first section (==== tag) is a header and ignore it
+    # Assume anything before the first section (==== tag) is a header and ignore it. To
+    # ensure that test will not be skipped unintentionally we reject headers that start
+    # with what looks like a subsection.
+    header = text[:match.start()]
+    if re.match(r'^%s' % SUBSECTION_DELIMITER, header):
+      raise RuntimeError, dedent("""
+          Header must not start with '%s'. Everything before the first line matching '%s'
+          is considered header information and will be ignored. However a header must not
+          start with '%s' to prevent test cases from accidentally being ignored.""" %
+          (SUBSECTION_DELIMITER, SECTION_DELIMITER, SUBSECTION_DELIMITER))
     text = text[match.start():]
 
   # Split the test file up into sections. For each section, parse all subsections.
@@ -146,7 +163,7 @@ def parse_test_file_text(text, valid_section_names, skip_unknown_sections=True):
     parsed_sections = collections.defaultdict(str)
     for sub_section in re.split(r'(?m)^%s' % SUBSECTION_DELIMITER, section[1:]):
       # Skip empty subsections
-      if not sub_section:
+      if not sub_section.strip():
         continue
 
       lines = sub_section.split('\n')
@@ -160,7 +177,7 @@ def parse_test_file_text(text, valid_section_names, skip_unknown_sections=True):
       if subsection_name not in valid_section_names:
         if skip_unknown_sections or not subsection_name:
           print sub_section
-          print 'Unknown section %s' % subsection_name
+          print 'Unknown section \'%s\'' % subsection_name
           continue
         else:
           raise RuntimeError, 'Unknown subsection: %s' % subsection_name
@@ -170,9 +187,9 @@ def parse_test_file_text(text, valid_section_names, skip_unknown_sections=True):
 
       if subsection_name == 'RESULTS' and subsection_comment:
         for comment in subsection_comment.split(','):
-          if subsection_comment == 'MULTI_LINE':
+          if comment == 'MULTI_LINE':
             parsed_sections['MULTI_LINE'] = comment
-          elif subsection_comment.startswith('VERIFY'):
+          elif comment.startswith('VERIFY'):
             parsed_sections['VERIFIER'] = comment
           else:
             raise RuntimeError, 'Unknown subsection comment: %s' % comment

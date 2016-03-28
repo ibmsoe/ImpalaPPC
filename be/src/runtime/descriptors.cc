@@ -37,6 +37,8 @@ using namespace strings;
 const int impala::RowDescriptor::INVALID_IDX;
 namespace impala {
 
+const int RowDescriptor::INVALID_IDX;
+
 string NullIndicatorOffset::DebugString() const {
   stringstream out;
   out << "(offset=" << byte_offset
@@ -60,9 +62,8 @@ SlotDescriptor::SlotDescriptor(
     tuple_offset_(tdesc.byteOffset),
     null_indicator_offset_(tdesc.nullIndicatorByte, tdesc.nullIndicatorBit),
     slot_idx_(tdesc.slotIdx),
-    slot_size_(type_.GetByteSize()),
+    slot_size_(type_.GetSlotSize()),
     field_idx_(-1),
-    is_materialized_(tdesc.isMaterialized),
     is_null_fn_(NULL),
     set_not_null_fn_(NULL),
     set_null_fn_(NULL) {
@@ -264,12 +265,28 @@ string HBaseTableDescriptor::DebugString() const {
   return out.str();
 }
 
+KuduTableDescriptor::KuduTableDescriptor(const TTableDescriptor& tdesc)
+  : TableDescriptor(tdesc),
+    table_name_(tdesc.kuduTable.table_name),
+    key_columns_(tdesc.kuduTable.key_columns),
+    master_addresses_(tdesc.kuduTable.master_addresses) {
+}
+
+string KuduTableDescriptor::DebugString() const {
+  stringstream out;
+  out << "KuduTable(" << TableDescriptor::DebugString() << " table=" << table_name_;
+  out << " master_addrs=[" <<   join(master_addresses_, ",") << "]";
+  out << " key_columns=[";
+  out << join(key_columns_, ":");
+  out << "])";
+  return out.str();
+}
+
 TupleDescriptor::TupleDescriptor(const TTupleDescriptor& tdesc)
   : id_(tdesc.id),
     table_desc_(NULL),
     byte_size_(tdesc.byteSize),
     num_null_bytes_(tdesc.numNullBytes),
-    num_materialized_slots_(0),
     slots_(),
     has_varlen_slots_(false),
     tuple_path_(tdesc.tuplePath),
@@ -278,16 +295,13 @@ TupleDescriptor::TupleDescriptor(const TTupleDescriptor& tdesc)
 
 void TupleDescriptor::AddSlot(SlotDescriptor* slot) {
   slots_.push_back(slot);
-  if (slot->is_materialized()) {
-    ++num_materialized_slots_;
-    if (slot->type().IsVarLenStringType()) {
-      string_slots_.push_back(slot);
-      has_varlen_slots_ = true;
-    }
-    if (slot->type().IsCollectionType()) {
-      collection_slots_.push_back(slot);
-      has_varlen_slots_ = true;
-    }
+  if (slot->type().IsVarLenStringType()) {
+    string_slots_.push_back(slot);
+    has_varlen_slots_ = true;
+  }
+  if (slot->type().IsCollectionType()) {
+    collection_slots_.push_back(slot);
+    has_varlen_slots_ = true;
   }
 }
 
@@ -468,6 +482,9 @@ Status DescriptorTbl::Create(ObjectPool* pool, const TDescriptorTable& thrift_tb
       case TTableType::DATA_SOURCE_TABLE:
         desc = pool->Add(new DataSourceTableDescriptor(tdesc));
         break;
+      case TTableType::KUDU_TABLE:
+        desc = pool->Add(new KuduTableDescriptor(tdesc));
+        break;
       default:
         DCHECK(false) << "invalid table type: " << tdesc.tableType;
     }
@@ -488,18 +505,13 @@ Status DescriptorTbl::Create(ObjectPool* pool, const TDescriptorTable& thrift_tb
     const TSlotDescriptor& tdesc = thrift_tbl.slotDescriptors[i];
     // Tuple descriptors are already populated in tbl
     TupleDescriptor* parent = (*tbl)->GetTupleDescriptor(tdesc.parent);
+    DCHECK(parent != NULL);
     TupleDescriptor* collection_item_descriptor = tdesc.__isset.itemTupleId ?
         (*tbl)->GetTupleDescriptor(tdesc.itemTupleId) : NULL;
     SlotDescriptor* slot_d = pool->Add(
         new SlotDescriptor(tdesc, parent, collection_item_descriptor));
     (*tbl)->slot_desc_map_[tdesc.id] = slot_d;
-
-    // link to parent
-    TupleDescriptorMap::iterator entry = (*tbl)->tuple_desc_map_.find(tdesc.parent);
-    if (entry == (*tbl)->tuple_desc_map_.end()) {
-      return Status("unknown tid in slot descriptor msg");
-    }
-    entry->second->AddSlot(slot_d);
+    parent->AddSlot(slot_d);
   }
   return Status::OK();
 }
@@ -553,9 +565,10 @@ void DescriptorTbl::GetTupleDescs(vector<TupleDescriptor*>* descs) const {
 //   %is_null = icmp ne i8 %null_mask, 0
 //   ret i1 %is_null
 // }
-Function* SlotDescriptor::CodegenIsNull(LlvmCodeGen* codegen, StructType* tuple) {
+Function* SlotDescriptor::GetIsNullFn(LlvmCodeGen* codegen) const {
   if (is_null_fn_ != NULL) return is_null_fn_;
-  PointerType* tuple_ptr_type = PointerType::get(tuple, 0);
+  StructType* tuple_type = parent()->GetLlvmStruct(codegen);
+  PointerType* tuple_ptr_type = tuple_type->getPointerTo();
   LlvmCodeGen::FnPrototype prototype(codegen, "IsNull", codegen->GetType(TYPE_BOOLEAN));
   prototype.AddArgument(LlvmCodeGen::NamedVariable("tuple", tuple_ptr_type));
 
@@ -587,12 +600,12 @@ Function* SlotDescriptor::CodegenIsNull(LlvmCodeGen* codegen, StructType* tuple)
 //   store i8 %0, i8* %null_byte_ptr
 //   ret void
 // }
-Function* SlotDescriptor::CodegenUpdateNull(LlvmCodeGen* codegen,
-    StructType* tuple, bool set_null) {
+Function* SlotDescriptor::GetUpdateNullFn(LlvmCodeGen* codegen, bool set_null) const {
   if (set_null && set_null_fn_ != NULL) return set_null_fn_;
   if (!set_null && set_not_null_fn_ != NULL) return set_not_null_fn_;
 
-  PointerType* tuple_ptr_type = PointerType::get(tuple, 0);
+  StructType* tuple_type = parent()->GetLlvmStruct(codegen);
+  PointerType* tuple_ptr_type = tuple_type->getPointerTo();
   LlvmCodeGen::FnPrototype prototype(codegen, (set_null) ? "SetNull" :"SetNotNull",
       codegen->void_type());
   prototype.AddArgument(LlvmCodeGen::NamedVariable("tuple", tuple_ptr_type));
@@ -633,13 +646,13 @@ Function* SlotDescriptor::CodegenUpdateNull(LlvmCodeGen* codegen,
 // to begin on the size for that type.
 // TODO: Understand llvm::SetTargetData which allows you to explicitly define the packing
 // rules.
-StructType* TupleDescriptor::GenerateLlvmStruct(LlvmCodeGen* codegen) {
+StructType* TupleDescriptor::GetLlvmStruct(LlvmCodeGen* codegen) const {
   // If we already generated the llvm type, just return it.
   if (llvm_struct_ != NULL) return llvm_struct_;
 
   // For each null byte, add a byte to the struct
   vector<Type*> struct_fields;
-  struct_fields.resize(num_null_bytes_ + num_materialized_slots_);
+  struct_fields.resize(num_null_bytes_ + slots_.size());
   for (int i = 0; i < num_null_bytes_; ++i) {
     struct_fields[i] = codegen->GetType(TYPE_TINYINT);
   }
@@ -648,11 +661,9 @@ StructType* TupleDescriptor::GenerateLlvmStruct(LlvmCodeGen* codegen) {
   for (int i = 0; i < slots().size(); ++i) {
     SlotDescriptor* slot_desc = slots()[i];
     if (slot_desc->type().type == TYPE_CHAR) return NULL;
-    if (slot_desc->is_materialized()) {
-      slot_desc->field_idx_ = slot_desc->slot_idx_ + num_null_bytes_;
-      DCHECK_LT(slot_desc->field_idx(), struct_fields.size());
-      struct_fields[slot_desc->field_idx()] = codegen->GetType(slot_desc->type());
-    }
+    slot_desc->field_idx_ = slot_desc->slot_idx_ + num_null_bytes_;
+    DCHECK_LT(slot_desc->field_idx(), struct_fields.size());
+    struct_fields[slot_desc->field_idx()] = codegen->GetType(slot_desc->type());
   }
 
   // Construct the struct type.
@@ -671,14 +682,12 @@ StructType* TupleDescriptor::GenerateLlvmStruct(LlvmCodeGen* codegen) {
   }
   for (int i = 0; i < slots().size(); ++i) {
     SlotDescriptor* slot_desc = slots()[i];
-    if (slot_desc->is_materialized()) {
-      int field_idx = slot_desc->field_idx();
-      // Verify that the byte offset in the llvm struct matches the tuple offset
-      // computed in the FE
-      if (layout->getElementOffset(field_idx) != slot_desc->tuple_offset()) {
-        DCHECK_EQ(layout->getElementOffset(field_idx), slot_desc->tuple_offset());
-        return NULL;
-      }
+    int field_idx = slot_desc->field_idx();
+    // Verify that the byte offset in the llvm struct matches the tuple offset
+    // computed in the FE
+    if (layout->getElementOffset(field_idx) != slot_desc->tuple_offset()) {
+      DCHECK_EQ(layout->getElementOffset(field_idx), slot_desc->tuple_offset());
+      return NULL;
     }
   }
   llvm_struct_ = tuple_struct;

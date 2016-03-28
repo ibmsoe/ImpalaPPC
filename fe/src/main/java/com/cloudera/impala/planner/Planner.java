@@ -4,21 +4,22 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import com.cloudera.impala.analysis.ExprSubstitutionMap;
+import com.cloudera.impala.analysis.QueryStmt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.cloudera.impala.analysis.AnalysisContext;
 import com.cloudera.impala.analysis.ColumnLineageGraph;
 import com.cloudera.impala.analysis.Expr;
-import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.cloudera.impala.analysis.InsertStmt;
-import com.cloudera.impala.analysis.QueryStmt;
 import com.cloudera.impala.catalog.HBaseTable;
 import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.PrintUtils;
 import com.cloudera.impala.common.RuntimeEnv;
 import com.cloudera.impala.thrift.TExplainLevel;
+import com.cloudera.impala.thrift.TRuntimeFilterMode;
 import com.cloudera.impala.thrift.TQueryCtx;
 import com.cloudera.impala.thrift.TQueryExecRequest;
 import com.cloudera.impala.thrift.TTableName;
@@ -41,7 +42,8 @@ public class Planner {
 
   /**
    * Returns a list of plan fragments for executing an analyzed parse tree.
-   * May return a single-node or distributed executable plan.
+   * May return a single-node or distributed executable plan. If enabled (through a
+   * query option), computes runtime filters for dynamic partition pruning.
    *
    * Plan generation may fail and throw for the following reasons:
    * 1. Expr evaluation failed, e.g., during partition pruning.
@@ -74,6 +76,13 @@ public class Planner {
         // Only one scanner thread for small queries
         ctx_.getQueryOptions().setNum_scanner_threads(1);
       }
+    } else if (
+      ctx_.getQueryOptions().getRuntime_filter_mode() != TRuntimeFilterMode.OFF) {
+      // Always compute filters, even if the BE won't always use all of them.
+      RuntimeFilterGenerator.generateRuntimeFilters(ctx_.getRootAnalyzer(),
+          singleNodePlan, ctx_.getQueryOptions().getMax_num_runtime_filters());
+      ctx_.getRootAnalyzer().getTimeline().markEvent(
+          "Runtime filters computed");
     }
 
     if (ctx_.isSingleNodeExec()) {
@@ -88,15 +97,10 @@ public class Planner {
 
     PlanFragment rootFragment = fragments.get(fragments.size() - 1);
     ExprSubstitutionMap rootNodeSmap = rootFragment.getPlanRoot().getOutputSmap();
-    ColumnLineageGraph graph = ctx_.getRootAnalyzer().getColumnLineageGraph();
     List<Expr> resultExprs = null;
-    Table targetTable = null;
     if (ctx_.isInsertOrCtas()) {
       InsertStmt insertStmt = ctx_.getAnalysisResult().getInsertStmt();
       insertStmt.substituteResultExprs(rootNodeSmap, ctx_.getRootAnalyzer());
-      resultExprs = insertStmt.getResultExprs();
-      targetTable = insertStmt.getTargetTable();
-      graph.addTargetColumnLabels(targetTable);
       if (!ctx_.isSingleNodeExec()) {
         // repartition on partition keys
         rootFragment = distributedPlanner.createInsertFragment(
@@ -104,11 +108,18 @@ public class Planner {
       }
       // set up table sink for root fragment
       rootFragment.setSink(insertStmt.createDataSink());
+      resultExprs = insertStmt.getResultExprs();
     } else {
+      if (ctx_.isUpdate()) {
+        // Set up update sink for root fragment
+        rootFragment.setSink(ctx_.getAnalysisResult().getUpdateStmt().createDataSink());
+      } else if (ctx_.isDelete()) {
+        // Set up delete sink for root fragment
+        rootFragment.setSink(ctx_.getAnalysisResult().getDeleteStmt().createDataSink());
+      }
       QueryStmt queryStmt = ctx_.getQueryStmt();
       queryStmt.substituteResultExprs(rootNodeSmap, ctx_.getRootAnalyzer());
       resultExprs = queryStmt.getResultExprs();
-      graph.addTargetColumnLabels(ctx_.getQueryStmt().getColLabels());
     }
     rootFragment.setOutputExprs(resultExprs);
 
@@ -122,9 +133,12 @@ public class Planner {
     Collections.reverse(fragments);
     ctx_.getRootAnalyzer().getTimeline().markEvent("Distributed plan created");
 
+    ColumnLineageGraph graph = ctx_.getRootAnalyzer().getColumnLineageGraph();
     if (RuntimeEnv.INSTANCE.computeLineage() || RuntimeEnv.INSTANCE.isTestEnv()) {
       // Compute the column lineage graph
       if (ctx_.isInsertOrCtas()) {
+        Table targetTable = ctx_.getAnalysisResult().getInsertStmt().getTargetTable();
+        graph.addTargetColumnLabels(targetTable);
         Preconditions.checkNotNull(targetTable);
         List<Expr> exprs = Lists.newArrayList();
         if (targetTable instanceof HBaseTable) {
@@ -136,6 +150,7 @@ public class Planner {
         }
         graph.computeLineageGraph(exprs, ctx_.getRootAnalyzer());
       } else {
+        graph.addTargetColumnLabels(ctx_.getQueryStmt().getColLabels());
         graph.computeLineageGraph(resultExprs, ctx_.getRootAnalyzer());
       }
       LOG.trace("lineage: " + graph.debugString());
@@ -215,6 +230,21 @@ public class Planner {
   }
 
   /**
+   * Returns true if the fragments are for a trivial, coordinator-only query:
+   * Case 1: Only an EmptySetNode, e.g. query has a limit 0.
+   * Case 2: Query has only constant exprs.
+   */
+  private static boolean isTrivialCoordOnlyPlan(List<PlanFragment> fragments) {
+    Preconditions.checkNotNull(fragments);
+    Preconditions.checkState(!fragments.isEmpty());
+    if (fragments.size() > 1) return false;
+    PlanNode root = fragments.get(0).getPlanRoot();
+    if (root instanceof EmptySetNode) return true;
+    if (root instanceof UnionNode && ((UnionNode) root).isConstantUnion()) return true;
+    return false;
+  }
+
+  /**
    * Estimates the per-host memory and CPU requirements for the given plan fragments,
    * and sets the results in request.
    * Optionally excludes the requirements for unpartitioned fragments.
@@ -249,8 +279,15 @@ public class Planner {
     // Do not ask for more cores than are in the RuntimeEnv.
     maxPerHostVcores = Math.min(maxPerHostVcores, RuntimeEnv.INSTANCE.getNumCores());
 
-    // Legitimately set costs to zero if there are only unpartitioned fragments
-    // and excludeUnpartitionedFragments is true.
+    // Special case for some trivial coordinator-only queries (IMPALA-3053, IMPALA-1092).
+    if (isTrivialCoordOnlyPlan(fragments)) {
+      maxPerHostMem = 1024;
+      maxPerHostVcores = 1;
+    }
+
+    // Set costs to zero if there are only unpartitioned fragments and
+    // excludeUnpartitionedFragments is true.
+    // TODO: handle this case with a better indication for unknown, e.g. -1 or not set.
     if (maxPerHostMem == Long.MIN_VALUE || maxPerHostVcores == Integer.MIN_VALUE) {
       boolean allUnpartitioned = true;
       for (PlanFragment fragment: fragments) {

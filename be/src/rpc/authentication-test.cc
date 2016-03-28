@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
-
+#include "testutil/gtest-util.h"
+#include "common/init.h"
 #include "common/logging.h"
 #include "rpc/authentication.h"
 #include "rpc/thrift-server.h"
 #include "util/network-util.h"
 #include "util/thread.h"
+
+#include <ldap.h>
 
 DECLARE_bool(enable_ldap_auth);
 DECLARE_string(ldap_uri);
@@ -26,6 +28,7 @@ DECLARE_string(keytab_file);
 DECLARE_string(principal);
 DECLARE_string(ssl_client_ca_certificate);
 DECLARE_string(ssl_server_certificate);
+DECLARE_string(internal_principals_whitelist);
 
 // These are here so that we can grab them early in main() - the kerberos
 // init can clobber KRB5_KTNAME in PrincipalSubstitution.
@@ -36,12 +39,18 @@ static const char *env_princ = NULL;
 
 namespace impala {
 
+int SaslAuthorizeInternal(sasl_conn_t* conn, void* context,
+    const char* requested_user, unsigned rlen,
+    const char* auth_identity, unsigned alen,
+    const char* def_realm, unsigned urlen,
+    struct propctx* propctx);
+
 TEST(Auth, PrincipalSubstitution) {
   string hostname;
-  ASSERT_TRUE(GetHostname(&hostname).ok());
+  ASSERT_OK(GetHostname(&hostname));
   SaslAuthProvider sa(false);  // false means it's external
-  ASSERT_TRUE(sa.InitKerberos("service_name/_HOST@some.realm", "/etc/hosts").ok());
-  ASSERT_TRUE(sa.Start().ok());
+  ASSERT_OK(sa.InitKerberos("service_name/_HOST@some.realm", "/etc/hosts"));
+  ASSERT_OK(sa.Start());
   ASSERT_EQ(string::npos, sa.principal().find("_HOST"));
   ASSERT_NE(string::npos, sa.principal().find(hostname));
   ASSERT_EQ("service_name", sa.service_name());
@@ -49,8 +58,45 @@ TEST(Auth, PrincipalSubstitution) {
   ASSERT_EQ("some.realm", sa.realm());
 }
 
+void AuthOk(const string& name, SaslAuthProvider* sa) {
+  EXPECT_EQ(SASL_OK,
+      SaslAuthorizeInternal(NULL, (void*)sa, name.c_str(), name.size(), NULL, 0, NULL, 0,
+          NULL));
+}
+
+void AuthFails(const string& name, SaslAuthProvider* sa) {
+  EXPECT_EQ(SASL_BADAUTH,
+      SaslAuthorizeInternal(NULL, (void*)sa, name.c_str(), name.size(), NULL, 0, NULL, 0,
+          NULL));
+}
+
+TEST(Auth, AuthorizeInternalPrincipals) {
+  SaslAuthProvider sa(true);  // false means it's external
+  ASSERT_OK(sa.InitKerberos("service_name/localhost@some.realm", "/etc/hosts"));
+
+  AuthOk("service_name/localhost@some.realm", &sa);
+  AuthFails("unknown/localhost@some.realm", &sa);
+
+  FLAGS_internal_principals_whitelist = "hdfs1,hdfs2";
+  AuthOk("hdfs1/localhost@some.realm", &sa);
+  AuthOk("hdfs2/localhost@some.realm", &sa);
+  AuthFails("hdfs/localhost@some.realm", &sa);
+
+  AuthFails("hdfs1@some.realm", &sa);
+  AuthFails("/localhost@some.realm", &sa);
+
+  FLAGS_internal_principals_whitelist = "";
+  AuthFails("", &sa);
+
+  FLAGS_internal_principals_whitelist = ",";
+  AuthFails("", &sa);
+
+  FLAGS_internal_principals_whitelist = " ,";
+  AuthFails("", &sa);
+}
+
 TEST(Auth, ValidAuthProviders) {
-  ASSERT_TRUE(AuthManager::GetInstance()->Init().ok());
+  ASSERT_OK(AuthManager::GetInstance()->Init());
   ASSERT_TRUE(AuthManager::GetInstance()->GetExternalAuthProvider() != NULL);
   ASSERT_TRUE(AuthManager::GetInstance()->GetInternalAuthProvider() != NULL);
 }
@@ -64,7 +110,7 @@ TEST(Auth, LdapAuth) {
   FLAGS_ldap_uri = "ldaps://bogus.com";
 
   // Initialization based on above "command line" args
-  ASSERT_TRUE(AuthManager::GetInstance()->Init().ok());
+  ASSERT_OK(AuthManager::GetInstance()->Init());
 
   // External auth provider is sasl, ldap, but not kerberos
   ap = AuthManager::GetInstance()->GetExternalAuthProvider();
@@ -92,7 +138,7 @@ TEST(Auth, LdapKerbAuth) {
   FLAGS_ldap_uri = "ldaps://bogus.com";
 
   // Initialization based on above "command line" args
-  ASSERT_TRUE(AuthManager::GetInstance()->Init().ok());
+  ASSERT_OK(AuthManager::GetInstance()->Init());
 
   // External auth provider is sasl, ldap, and kerberos
   ap = AuthManager::GetInstance()->GetExternalAuthProvider();
@@ -109,27 +155,26 @@ TEST(Auth, LdapKerbAuth) {
   ASSERT_EQ(FLAGS_principal, sa->principal());
 }
 
-// Test for workaround for IMPALA-2598: SSL and Kerberos do not mix on server<->server
-// connections. Tests that Impala will fail to start if so configured.
-TEST(Auth, KerbAndSslDisabled) {
+// Test for IMPALA-2598: SSL and Kerberos do not mix on server<->server connections.
+// Tests that Impala will successfully start if so configured.
+TEST(Auth, KerbAndSslEnabled) {
   string hostname;
-  ASSERT_TRUE(GetHostname(&hostname).ok());
+  ASSERT_OK(GetHostname(&hostname));
   FLAGS_ssl_client_ca_certificate = "some_path";
   FLAGS_ssl_server_certificate = "some_path";
   ASSERT_TRUE(EnableInternalSslConnections());
   SaslAuthProvider sa_internal(true);
-  ASSERT_FALSE(
-      sa_internal.InitKerberos("service_name/_HOST@some.realm", "/etc/hosts").ok());
+  ASSERT_OK(
+      sa_internal.InitKerberos("service_name/_HOST@some.realm", "/etc/hosts"));
   SaslAuthProvider sa_external(false);
-  ASSERT_TRUE(
-      sa_external.InitKerberos("service_name/_HOST@some.realm", "/etc/hosts").ok());
+  ASSERT_OK(
+      sa_external.InitKerberos("service_name/_HOST@some.realm", "/etc/hosts"));
 }
 
 }
 
 int main(int argc, char** argv) {
-  impala::InitGoogleLoggingSafe(argv[0]);
-  impala::InitThreading();
+  impala::InitCommonRuntime(argc, argv, true, impala::TestInfo::BE_TEST);
   ::testing::InitGoogleTest(&argc, argv);
 
   env_keytab = getenv("KRB5_KTNAME");

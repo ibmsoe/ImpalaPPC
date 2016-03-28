@@ -104,6 +104,12 @@ public class CollectionTableRef extends TableRef {
           .toRequest());
     }
     isAnalyzed_ = true;
+    analyzeHints(analyzer);
+
+    // TODO: For joins on nested collections some join ops can be simplified
+    // due to the containment relationship of the parent and child. For example,
+    // a FULL OUTER JOIN would become a LEFT OUTER JOIN, or a RIGHT SEMI JOIN
+    // would become an INNER or CROSS JOIN.
     analyzeJoin(analyzer);
   }
 

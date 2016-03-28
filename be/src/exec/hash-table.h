@@ -21,6 +21,7 @@
 #include <boost/scoped_ptr.hpp>
 #include "codegen/impala-ir.h"
 #include "common/logging.h"
+#include "common/compiler-util.h"
 #include "runtime/buffered-block-mgr.h"
 #include "runtime/buffered-tuple-stream.h"
 #include "runtime/buffered-tuple-stream.inline.h"
@@ -93,12 +94,13 @@ class HashTable;
 /// TODO: this is not a fancy hash table in terms of memory access patterns
 /// (cuckoo-hashing or something that spills to disk). We will likely want to invest
 /// more time into this.
-/// TODO: hash-join and aggregation have very different access patterns.  Joins insert
-/// all the rows and then calls scan to find them.  Aggregation interleaves Find() and
+/// TODO: hash-join and aggregation have very different access patterns.  Joins insert all
+/// the rows and then calls scan to find them.  Aggregation interleaves FindProbeRow() and
 /// Inserts().  We may want to optimize joins more heavily for Inserts() (in particular
 /// growing).
 /// TODO: Batched interface for inserts and finds.
 /// TODO: Do we need to check mem limit exceeded so often. Check once per batch?
+/// TODO: as an optimization, compute variable-length data size for the agg node.
 
 /// Control block for a hash table. This class contains the logic as well as the variables
 /// needed by a thread to operate on a hash table.
@@ -106,38 +108,43 @@ class HashTableCtx {
  public:
   /// Create a hash table context.
   ///  - build_exprs are the exprs that should be used to evaluate rows during Insert().
-  ///  - probe_exprs are used during Find()
+  ///  - probe_exprs are used during FindProbeRow()
   ///  - stores_nulls: if false, TupleRows with nulls are ignored during Insert
-  ///  - finds_nulls: if false, Find() returns End() for TupleRows with nulls
-  ///      even if stores_nulls is true
+  ///  - finds_nulls: if finds_nulls[i] is false, FindProbeRow() returns End() for
+  ///      TupleRows with nulls in position i even if stores_nulls is true.
   ///  - initial_seed: Initial seed value to use when computing hashes for rows with
   ///    level 0. Other levels have their seeds derived from this seed.
   ///  - The max levels we will hash with.
+  /// TODO: stores_nulls is too coarse: for a hash table in which some columns are joined
+  ///       with '<=>' and others with '=', stores_nulls could distinguish between columns
+  ///       in which nulls are stored and columns in which they are not, which could save
+  ///       space by not storing some rows we know will never match.
   HashTableCtx(const std::vector<ExprContext*>& build_expr_ctxs,
       const std::vector<ExprContext*>& probe_expr_ctxs, bool stores_nulls,
-      bool finds_nulls, int32_t initial_seed, int max_levels,
+      const std::vector<bool>& finds_nulls, int32_t initial_seed, int max_levels,
       int num_build_tuples);
 
   /// Call to cleanup any resources.
   void Close();
 
   void set_level(int level);
-  int level() const { return level_; }
-  uint32_t seed(int level) { return seeds_.at(level); }
 
-  TupleRow* row() const { return row_; }
+  int ALWAYS_INLINE level() const { return level_; }
+  uint32_t ALWAYS_INLINE seed(int level) { return seeds_.at(level); }
+
+  TupleRow* ALWAYS_INLINE row() const { return row_; }
 
   /// Returns the results of the exprs at 'expr_idx' evaluated over the last row
   /// processed.
   /// This value is invalid if the expr evaluated to NULL.
   /// TODO: this is an awkward abstraction but aggregation node can take advantage of
   /// it and save some expr evaluation calls.
-  void* last_expr_value(int expr_idx) const {
+  void* ALWAYS_INLINE last_expr_value(int expr_idx) const {
     return expr_values_buffer_ + expr_values_buffer_offsets_[expr_idx];
   }
 
   /// Returns if the expr at 'expr_idx' evaluated to NULL for the last row.
-  bool last_expr_value_null(int expr_idx) const {
+  bool ALWAYS_INLINE last_expr_value_null(int expr_idx) const {
     return expr_value_null_bits_[expr_idx];
   }
 
@@ -149,23 +156,26 @@ class HashTableCtx {
   bool IR_ALWAYS_INLINE EvalAndHashBuild(TupleRow* row, uint32_t* hash);
   bool IR_ALWAYS_INLINE EvalAndHashProbe(TupleRow* row, uint32_t* hash);
 
-  int results_buffer_size() const { return results_buffer_size_; }
+  int ALWAYS_INLINE results_buffer_size() const { return results_buffer_size_; }
 
   /// Codegen for evaluating a tuple row.  Codegen'd function matches the signature
   /// for EvalBuildRow and EvalTupleRow.
   /// If build_row is true, the codegen uses the build_exprs, otherwise the probe_exprs.
-  llvm::Function* CodegenEvalRow(RuntimeState* state, bool build_row);
+  Status CodegenEvalRow(RuntimeState* state, bool build_row, llvm::Function** fn);
 
   /// Codegen for evaluating a TupleRow and comparing equality against
   /// 'expr_values_buffer_'.  Function signature matches HashTable::Equals().
-  llvm::Function* CodegenEquals(RuntimeState* state);
+  /// force_null_equality is true if the generated equality function should treat all
+  /// NULLs as equal. See the template parameter to HashTable::Equals().
+  Status CodegenEquals(RuntimeState* state, bool force_null_equality,
+      llvm::Function** fn);
 
   /// Codegen for hashing the expr values in 'expr_values_buffer_'. Function prototype
   /// matches HashCurrentRow identically. Unlike HashCurrentRow(), the returned function
   /// only uses a single hash function, rather than switching based on level_.
   /// If 'use_murmur' is true, murmur hash is used, otherwise CRC is used if the hardware
   /// supports it (see hash-util.h).
-  llvm::Function* CodegenHashCurrentRow(RuntimeState* state, bool use_murmur);
+  Status CodegenHashCurrentRow(RuntimeState* state, bool use_murmur, llvm::Function** fn);
 
   static const char* LLVM_CLASS_NAME;
 
@@ -222,9 +232,11 @@ class HashTableCtx {
   /// This will be replaced by codegen.
   bool EvalRow(TupleRow* row, const std::vector<ExprContext*>& ctxs);
 
-  /// Returns true if the values of build_exprs evaluated over 'build_row' equal
-  /// the values cached in expr_values_buffer_.
-  /// This will be replaced by codegen.
+  /// Returns true if the values of build_exprs evaluated over 'build_row' equal the
+  /// values cached in expr_values_buffer_.  This will be replaced by
+  /// codegen. FORCE_NULL_EQUALITY is true if all nulls should be treated as equal,
+  /// regardless of the values of finds_nulls_
+  template<bool FORCE_NULL_EQUALITY>
   bool IR_NO_INLINE Equals(TupleRow* build_row);
 
   const std::vector<ExprContext*>& build_expr_ctxs_;
@@ -235,7 +247,10 @@ class HashTableCtx {
   /// TODO: these constants are an ideal candidate to be removed with codegen.
   /// TODO: ..or with template-ization
   const bool stores_nulls_;
-  const bool finds_nulls_;
+  const std::vector<bool> finds_nulls_;
+
+  /// finds_some_nulls_ is just the logical OR of finds_nulls_.
+  const bool finds_some_nulls_;
 
   /// The current level this context is working on. Each level needs to use a
   /// different seed.
@@ -245,7 +260,7 @@ class HashTableCtx {
   std::vector<uint32_t> seeds_;
 
   /// Cache of exprs values for the current row being evaluated.  This can either
-  /// be a build row (during Insert()) or probe row (during Find()).
+  /// be a build row (during Insert()) or probe row (during FindProbeRow()).
   std::vector<int> expr_values_buffer_offsets_;
 
   /// Byte offset into 'expr_values_buffer_' that begins the variable length results.
@@ -377,13 +392,13 @@ class HashTable {
   /// go to the next matching row. The matching rows do not need to be evaluated since all
   /// the nodes of a bucket are duplicates. One scan can be in progress for each 'ht_ctx'.
   /// Used during the probe phase of hash joins.
-  Iterator IR_ALWAYS_INLINE Find(HashTableCtx* ht_ctx, uint32_t hash);
+  Iterator IR_ALWAYS_INLINE FindProbeRow(HashTableCtx* ht_ctx, uint32_t hash);
 
-  /// If a match is found in the table, return an iterator as in Find(). If a match was
-  /// not present, return an iterator pointing to the empty bucket where the key should
-  /// be inserted. Returns End() if the table is full. The caller can set the data in
-  /// the bucket using a Set*() method on the iterator.
-  Iterator IR_ALWAYS_INLINE FindBucket(HashTableCtx* ht_ctx, uint32_t hash,
+  /// If a match is found in the table, return an iterator as in FindProbeRow(). If a
+  /// match was not present, return an iterator pointing to the empty bucket where the key
+  /// should be inserted. Returns End() if the table is full. The caller can set the data
+  /// in the bucket using a Set*() method on the iterator.
+  Iterator IR_ALWAYS_INLINE FindBuildRowBucket(HashTableCtx* ht_ctx, uint32_t hash,
       bool* found);
 
   /// Returns number of elements inserted in the hash table
@@ -418,6 +433,9 @@ class HashTable {
   /// duplicates.
   int64_t CurrentMemSize() const;
 
+  /// Returns the number of inserts that can be performed before resizing the table.
+  int64_t NumInsertsBeforeResize() const;
+
   /// Calculates the fill factor if 'buckets_to_fill' additional buckets were to be
   /// filled and resizes the hash table so that the projected fill factor is below the
   /// max fill factor.
@@ -425,8 +443,8 @@ class HashTable {
   /// inserted without need to resize.
   bool CheckAndResize(uint64_t buckets_to_fill, HashTableCtx* ht_ctx);
 
-  /// Returns the number of bytes allocated to the hash table
-  int64_t byte_size() const { return total_data_page_size_; }
+  /// Returns the number of bytes allocated to the hash table from the block manager.
+  int64_t ByteSize() const { return num_buckets_ * sizeof(Bucket) + total_data_page_size_; }
 
   /// Returns an iterator at the beginning of the hash table.  Advancing this iterator
   /// will traverse all elements.
@@ -456,6 +474,9 @@ class HashTable {
   /// Update and print some statistics that can be used for performance debugging.
   std::string PrintStats() const;
 
+  /// Number of hash collisions so far in the lifetime of this object
+  int64_t NumHashCollisions() const { return num_hash_collisions_; }
+
   /// stl-like iterator interface.
   class Iterator {
    private:
@@ -464,6 +485,7 @@ class HashTable {
 
    public:
 
+    ALWAYS_INLINE
     Iterator() : table_(NULL), row_(NULL), bucket_idx_(BUCKET_NOT_FOUND), node_(NULL) { }
 
     /// Iterates to the next element. It should be called only if !AtEnd().
@@ -478,17 +500,17 @@ class HashTable {
 
     /// Iterates to the next element that does not have its matched flag set. Used in
     /// right-outer and full-outer joins.
-    void NextUnmatched();
+    void IR_ALWAYS_INLINE NextUnmatched();
 
     /// Return the current row or tuple. Callers must check the iterator is not AtEnd()
     /// before calling them.  The returned row is owned by the iterator and valid until
     /// the next call to GetRow(). It is safe to advance the iterator.
-    TupleRow* GetRow() const;
-    Tuple* GetTuple() const;
+    TupleRow* IR_ALWAYS_INLINE GetRow() const;
+    Tuple* IR_ALWAYS_INLINE GetTuple() const;
 
-    /// Set the current tuple for an empty bucket. Designed to be used with the
-    /// iterator returned from FindBucket() in the case when the value is not found.
-    /// It is not valid to call this function if the bucket already has an entry.
+    /// Set the current tuple for an empty bucket. Designed to be used with the iterator
+    /// returned from FindBuildRowBucket() in the case when the value is not found.  It is
+    /// not valid to call this function if the bucket already has an entry.
     void SetTuple(Tuple* tuple, uint32_t hash);
 
     /// Sets as matched the Bucket or DuplicateNode currently pointed by the iterator,
@@ -504,11 +526,12 @@ class HashTable {
     void SetAtEnd();
 
     /// Returns true if this iterator is at the end, i.e. GetRow() cannot be called.
-    bool AtEnd() const { return bucket_idx_ == BUCKET_NOT_FOUND; }
+    bool ALWAYS_INLINE AtEnd() const { return bucket_idx_ == BUCKET_NOT_FOUND; }
 
    private:
     friend class HashTable;
 
+    ALWAYS_INLINE
     Iterator(HashTable* table, TupleRow* row, int bucket_idx, DuplicateNode* node)
       : table_(table),
         row_(row),
@@ -551,12 +574,15 @@ class HashTable {
   /// Using the returned index value, the caller can create an iterator that can be
   /// iterated until End() to find all the matching rows.
   /// EvalAndHashBuild() or EvalAndHashProb(e) must have been called before calling this.
+  /// 'FORCE_NULL_EQUALITY' is true if NULLs should always be considered equal when
+  /// comparing two rows.
   /// 'hash' must be the hash returned by these functions.
   /// 'found' indicates that a bucket that contains an equal row is found.
   ///
   /// There are wrappers of this function that perform the Find and Insert logic.
+  template <bool FORCE_NULL_EQUALITY>
   int64_t IR_ALWAYS_INLINE Probe(Bucket* buckets, int64_t num_buckets,
-      HashTableCtx* ht_ctx, uint32_t hash,  bool* found);
+      HashTableCtx* ht_ctx, uint32_t hash, bool* found);
 
   /// Performs the insert logic. Returns the HtData* of the bucket or duplicate node
   /// where the data should be inserted. Returns NULL if the insert was not successful.
@@ -665,7 +691,8 @@ class HashTable {
 
   /// The stats below can be used for debugging perf.
   /// TODO: Should we make these statistics atomic?
-  /// Number of Find(), Insert(), or FindBucket() calls that probe the hash table.
+  /// Number of FindProbeRow(), Insert(), or FindBuildRowBucket() calls that probe the
+  /// hash table.
   int64_t num_probes_;
 
   /// Number of probes that failed and had to fall back to linear probing without cap.

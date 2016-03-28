@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from copy import deepcopy
 from inspect import getmro
 from logging import getLogger
 from re import sub
 from sqlparse import format
 
-from tests.comparison.types import (
+from common import StructColumn, CollectionColumn
+from db_types import (
     Char,
     Decimal,
     Float,
@@ -26,10 +26,8 @@ from tests.comparison.types import (
     String,
     Timestamp,
     VarChar)
-from tests.comparison.query import Query
-from tests.comparison.common import StructColumn, CollectionColumn
-from tests.comparison.query_flattener import QueryFlattener
-
+from query import Query
+from query_flattener import QueryFlattener
 
 LOG = getLogger(__name__)
 
@@ -76,6 +74,11 @@ class SqlWriter(object):
         'Divide': '({0}) / ({1})',
         'Equals': '({0}) = ({1})',
         'NotEquals': '({0}) != ({1})',
+        'IsNotDistinctFrom': '({0}) IS NOT DISTINCT FROM ({1})',
+        # If a database supports the operator version of 'IS NOT DISTINCT FROM', it
+        # should overwrite the value of 'IsNotDistinctFromOp'.
+        'IsNotDistinctFromOp': '({0}) IS NOT DISTINCT FROM ({1})',
+        'IsDistinctFrom': '({0}) IS DISTINCT FROM ({1})',
         'LessThan': '({0}) < ({1})',
         'GreaterThan': '({0}) > ({1})',
         'LessThanOrEquals': '({0}) <= ({1})',
@@ -428,6 +431,17 @@ class SqlWriter(object):
 class ImpalaSqlWriter(SqlWriter):
 
   DIALECT = 'IMPALA'
+
+  def __init__(self, *args, **kwargs):
+    super(ImpalaSqlWriter, self).__init__(*args, **kwargs)
+    self.operator_funcs['IsNotDistinctFromOp'] = '({0}) <=> ({1})'
+
+  def _write_column(self, col):
+    result = super(ImpalaSqlWriter, self)._write_column(col)
+    if col.exact_type == Char:
+      # TRIM is a temporary workaround for IMPALA-1652
+      result = 'TRIM(%s)' % result
+    return result
 
 
 class OracleSqlWriter(SqlWriter):

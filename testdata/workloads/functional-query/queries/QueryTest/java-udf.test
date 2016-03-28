@@ -1,0 +1,236 @@
+====
+---- QUERY
+select udf_test.hive_pi()
+---- RESULTS
+3.141592653589793
+---- TYPES
+DOUBLE
+====
+---- QUERY
+select udf_test.hive_bin(100)
+---- RESULTS
+'1100100'
+---- TYPES
+STRING
+====
+---- QUERY
+select min(udf_test.hive_pi()) from functional.alltypesagg
+---- RESULTS
+3.141592653589793
+---- TYPES
+DOUBLE
+====
+---- QUERY
+# Test identity functions
+select udf_test.identity(true);
+---- TYPES
+boolean
+---- RESULTS
+true
+====
+---- QUERY
+select udf_test.identity(cast(10 as tinyint));
+---- TYPES
+tinyint
+---- RESULTS
+10
+====
+---- QUERY
+select udf_test.identity(cast(10 as smallint));
+---- TYPES
+smallint
+---- RESULTS
+10
+====
+---- QUERY
+select udf_test.identity(cast(10 as int));
+---- TYPES
+int
+---- RESULTS
+10
+====
+---- QUERY
+select udf_test.identity(cast(10 as bigint));
+---- TYPES
+bigint
+---- RESULTS
+10
+====
+---- QUERY
+select udf_test.identity(cast(10.0 as float));
+---- TYPES
+float
+---- RESULTS
+10
+====
+---- QUERY
+select udf_test.identity(cast(10.0 as double));
+---- TYPES
+double
+---- RESULTS
+10
+====
+---- QUERY
+# IMPALA-1456. Each "identity" call below tests a different type (BytesWritable, Text,
+# and String).
+select udf_test.identity("why hello there"),
+       udf_test.identity("why", " hello there"),
+       udf_test.identity("why", " hello", " there");
+---- TYPES
+string, string, string
+---- RESULTS
+'why hello there','why hello there','why hello there'
+====
+---- QUERY
+select udf_test.identity(NULL);
+---- TYPES
+boolean
+---- RESULTS
+NULL
+====
+---- QUERY
+# IMPALA-1134. Each "identity" call below tests a different type (BytesWritable, Text,
+# and String). The different types are handled slightly differently.
+select length(udf_test.identity("0123456789")),
+       length(udf_test.identity("0123456789", "0123456789")),
+       length(udf_test.identity("0123456789", "0123456789", "0123456789"));
+---- TYPES
+int, int, int
+---- RESULTS
+10,20,30
+====
+---- QUERY
+# IMPALA-1392: Hive UDFs that throw exceptions should return NULL
+select udf_test.throws_exception();
+---- TYPES
+boolean
+---- RESULTS
+NULL
+====
+---- QUERY
+select udf_test.throws_exception() from functional.alltypestiny;
+---- TYPES
+boolean
+---- RESULTS
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+====
+---- QUERY
+select udf_test.hive_add(cast(1 as int), cast(2 as int));
+---- TYPES
+int
+---- RESULTS
+3
+====
+---- QUERY
+select udf_test.hive_add(udf_test.hive_add(cast(1 as int), cast(2 as int)), cast(2 as int));
+---- TYPES
+int
+---- RESULTS
+5
+====
+---- QUERY
+select udf_test.hive_add(cast(udf_test.hive_add(cast(1 as int), cast(2 as int)) - udf_test.hive_add(cast(2 as int), cast(1 as int)) as int), cast(2 as int));
+---- TYPES
+int
+---- RESULTS
+2
+====
+---- QUERY
+select udf_test.hive_add(cast(1 as smallint), cast(2 as smallint));
+---- TYPES
+smallint
+---- RESULTS
+3
+====
+---- QUERY
+select udf_test.hive_add(cast(1.0 as float), cast(2.0 as float));
+---- TYPES
+float
+---- RESULTS
+3.0
+====
+---- QUERY
+select udf_test.hive_add(cast(1.0 as double), cast(2.0 as double));
+---- TYPES
+double
+---- RESULTS
+3.0
+====
+---- QUERY
+select udf_test.hive_add(cast(1 as boolean), cast(0 as boolean));
+---- TYPES
+boolean
+---- RESULTS
+false
+====
+---- QUERY
+# Testing whether all of persistent Java udfs are accessible.
+select java_udfs_test.identity(true);
+---- TYPES
+boolean
+---- RESULTS
+true
+====
+---- QUERY
+select java_udfs_test.identity(cast(10 as tinyint));
+---- TYPES
+tinyint
+---- RESULTS
+10
+====
+---- QUERY
+select java_udfs_test.identity(cast(10 as smallint));
+---- TYPES
+smallint
+---- RESULTS
+10
+====
+---- QUERY
+select java_udfs_test.identity(cast(10 as int));
+---- TYPES
+int
+---- RESULTS
+10
+====
+---- QUERY
+select java_udfs_test.identity(cast(10 as bigint));
+---- TYPES
+bigint
+---- RESULTS
+10
+====
+---- QUERY
+select java_udfs_test.identity(cast(10.0 as float));
+---- TYPES
+float
+---- RESULTS
+10
+====
+---- QUERY
+select java_udfs_test.identity(cast(10.0 as double));
+---- TYPES
+double
+---- RESULTS
+10
+====
+---- QUERY
+select java_udfs_test.identity("a", "b");
+---- TYPES
+string
+---- RESULTS
+'ab'
+====
+---- QUERY
+select java_udfs_test.identity("a", "b", "c");
+---- TYPES
+string
+---- RESULTS
+'abc'
+====

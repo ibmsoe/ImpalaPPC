@@ -15,10 +15,11 @@
 #include "runtime/mem-tracker.h"
 
 #include <boost/algorithm/string/join.hpp>
-#include <google/malloc_extension.h>
+#include <gperftools/malloc_extension.h>
 #include <gutil/strings/substitute.h>
 
 #include "runtime/exec-env.h"
+#include "runtime/runtime-state.h"
 #include "resourcebroker/resource-broker.h"
 #include "scheduling/query-resource-mgr.h"
 #include "util/debug-util.h"
@@ -38,7 +39,7 @@ MemTracker::RequestTrackersMap MemTracker::request_to_mem_trackers_;
 MemTracker::PoolTrackersMap MemTracker::pool_to_mem_trackers_;
 mutex MemTracker::static_mem_trackers_lock_;
 
-AtomicInt<int64_t> MemTracker::released_memory_since_gc_;
+AtomicInt64 MemTracker::released_memory_since_gc_;
 
 // Name for request pool MemTrackers. '$0' is replaced with the pool name.
 const string REQUEST_POOL_MEM_TRACKER_LABEL_FORMAT = "RequestPool=$0";
@@ -59,7 +60,8 @@ MemTracker::MemTracker(int64_t byte_limit, int64_t rm_reserved_limit, const stri
     query_resource_mgr_(NULL),
     num_gcs_metric_(NULL),
     bytes_freed_by_last_gc_metric_(NULL),
-    bytes_over_limit_metric_(NULL) {
+    bytes_over_limit_metric_(NULL),
+    limit_metric_(NULL) {
   if (parent != NULL) parent_->AddChildTracker(this);
   Init();
 }
@@ -81,7 +83,8 @@ MemTracker::MemTracker(
     query_resource_mgr_(NULL),
     num_gcs_metric_(NULL),
     bytes_freed_by_last_gc_metric_(NULL),
-    bytes_over_limit_metric_(NULL) {
+    bytes_over_limit_metric_(NULL),
+    limit_metric_(NULL) {
   if (parent != NULL) parent_->AddChildTracker(this);
   Init();
 }
@@ -102,7 +105,8 @@ MemTracker::MemTracker(UIntGauge* consumption_metric,
     query_resource_mgr_(NULL),
     num_gcs_metric_(NULL),
     bytes_freed_by_last_gc_metric_(NULL),
-    bytes_over_limit_metric_(NULL) {
+    bytes_over_limit_metric_(NULL),
+    limit_metric_(NULL) {
   Init();
 }
 
@@ -130,6 +134,27 @@ void MemTracker::UnregisterFromParent() {
   lock_guard<mutex> l(parent_->child_trackers_lock_);
   parent_->child_trackers_.erase(child_tracker_it_);
   child_tracker_it_ = parent_->child_trackers_.end();
+}
+
+int64_t MemTracker::GetPoolMemReserved() const {
+  // Pool trackers should have a pool_name_ and no limit.
+  DCHECK(!pool_name_.empty());
+  DCHECK_EQ(limit_, -1);
+
+  int64_t mem_reserved = 0L;
+  lock_guard<mutex> l(child_trackers_lock_);
+  for (list<MemTracker*>::const_iterator it = child_trackers_.begin();
+       it != child_trackers_.end(); ++it) {
+    int64_t child_limit = (*it)->limit();
+    if (child_limit > 0) {
+      // Make sure we don't overflow if the query limits are set to ridiculous values.
+      mem_reserved += std::min(child_limit, MemInfo::physical_mem());
+    } else {
+      DCHECK_EQ(child_limit, -1);
+      mem_reserved += (*it)->consumption();
+    }
+  }
+  return mem_reserved;
 }
 
 MemTracker* MemTracker::GetRequestPoolMemTracker(const string& pool_name,
@@ -192,6 +217,7 @@ shared_ptr<MemTracker> MemTracker::GetQueryMemTracker(
 }
 
 MemTracker::~MemTracker() {
+  DCHECK_EQ(consumption_->current_value(), 0) << label_ << "\n" << GetStackTrace();
   lock_guard<mutex> l(static_mem_trackers_lock_);
   if (auto_unregister_) UnregisterFromParent();
   // Erase the weak ptr reference from the map.
@@ -210,6 +236,14 @@ void MemTracker::RegisterMetrics(MetricGroup* metrics, const string& prefix) {
 
   bytes_over_limit_metric_ = metrics->AddGauge<int64_t>(
       Substitute("$0.bytes-over-limit", prefix), -1);
+
+  limit_metric_ = metrics->AddGauge<int64_t>(Substitute("$0.limit", prefix), limit_);
+}
+
+void MemTracker::RefreshConsumptionFromMetric() {
+  DCHECK(consumption_metric_ != NULL);
+  DCHECK(parent_ == NULL);
+  consumption_->Set(consumption_metric_->value());
 }
 
 // Calling this on the query tracker results in output like:
@@ -263,9 +297,17 @@ void MemTracker::LogUpdate(bool is_consume, int64_t bytes) const {
   LOG(ERROR) << ss.str();
 }
 
+Status MemTracker::MemLimitExceeded(RuntimeState* state, const std::string& details,
+    int64_t failed_allocation_size) {
+  Status status = Status::MemLimitExceeded();
+  status.AddDetail(details);
+  if (state != NULL) state->LogMemLimitExceeded(this, failed_allocation_size);
+  return status;
+}
+
 bool MemTracker::GcMemory(int64_t max_consumption) {
   if (max_consumption < 0) return true;
-  lock_guard<SpinLock> l(gc_lock_);
+  lock_guard<mutex> l(gc_lock_);
   if (consumption_metric_ != NULL) consumption_->Set(consumption_metric_->value());
   uint64_t pre_gc_consumption = consumption();
   // Check if someone gc'd before us
@@ -275,7 +317,7 @@ bool MemTracker::GcMemory(int64_t max_consumption) {
   // Try to free up some memory
   for (int i = 0; i < gc_functions_.size(); ++i) {
     gc_functions_[i]();
-    if (consumption_metric_ != NULL) consumption_->Set(consumption_metric_->value());
+    if (consumption_metric_ != NULL) RefreshConsumptionFromMetric();
     if (consumption() <= max_consumption) break;
   }
 
@@ -287,7 +329,7 @@ bool MemTracker::GcMemory(int64_t max_consumption) {
 
 void MemTracker::GcTcmalloc() {
 #ifndef ADDRESS_SANITIZER
-  released_memory_since_gc_ = 0;
+  released_memory_since_gc_.Store(0);
   MallocExtension::instance()->ReleaseFreeMemory();
 #else
   // Nothing to do if not using tcmalloc.

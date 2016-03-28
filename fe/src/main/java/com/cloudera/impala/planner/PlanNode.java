@@ -15,6 +15,8 @@
 package com.cloudera.impala.planner;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -25,17 +27,18 @@ import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.ExprId;
 import com.cloudera.impala.analysis.ExprSubstitutionMap;
-import com.cloudera.impala.analysis.SlotId;
 import com.cloudera.impala.analysis.TupleDescriptor;
 import com.cloudera.impala.analysis.TupleId;
 import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.PrintUtils;
 import com.cloudera.impala.common.TreeNode;
+import com.cloudera.impala.planner.RuntimeFilterGenerator.RuntimeFilter;
 import com.cloudera.impala.thrift.TExecStats;
 import com.cloudera.impala.thrift.TExplainLevel;
 import com.cloudera.impala.thrift.TPlan;
 import com.cloudera.impala.thrift.TPlanNode;
 import com.cloudera.impala.thrift.TQueryOptions;
+import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -113,6 +116,9 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   // estimated per-host memory requirement for this node;
   // set in computeCosts(); invalid: -1
   protected long perHostMemCost_ = -1;
+
+  // Runtime filters assigned to this node.
+  protected List<RuntimeFilter> runtimeFilters_ = Lists.newArrayList();
 
   protected PlanNode(PlanNodeId id, ArrayList<TupleId> tupleIds, String displayName) {
     id_ = id;
@@ -368,6 +374,10 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
     for (Expr e: conjuncts_) {
       msg.addToConjuncts(e.treeToThrift());
     }
+    // Serialize any runtime filters
+    for (RuntimeFilter filter: runtimeFilters_) {
+      msg.addToRuntime_filters(filter.toThrift());
+    }
     toThrift(msg);
     container.addToNodes(msg);
     // For the purpose of the BE consider ExchangeNodes to have no children.
@@ -461,17 +471,6 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   }
 
   /**
-   * Marks all slots referenced in exprs as materialized.
-   */
-  protected void markSlotsMaterialized(Analyzer analyzer, List<Expr> exprs) {
-    List<SlotId> refdIdList = Lists.newArrayList();
-    for (Expr expr: exprs) {
-      expr.getIds(null, refdIdList);
-    }
-    analyzer.getDescTbl().markSlotsMaterialized(refdIdList);
-  }
-
-  /**
    * Call computeMemLayout() for all materialized tuples.
    */
   protected void computeMemLayout(Analyzer analyzer) {
@@ -481,15 +480,39 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   }
 
   /**
-   * Compute the product of the selectivies of all conjuncts.
+   * Returns the estimated combined selectivity of all conjuncts. Uses heuristics to
+   * address the following estimation challenges:
+   * 1. The individual selectivities of conjuncts may be unknown.
+   * 2. Two selectivities, whether known or unknown, could be correlated. Assuming
+   *    independence can lead to significant underestimation.
+   *
+   * The first issue is addressed by using a single default selectivity that is
+   * representative of all conjuncts with unknown selectivities.
+   * The second issue is addressed by an exponential backoff when multiplying each
+   * additional selectivity into the final result.
    */
   protected double computeSelectivity() {
-    double prod = 1.0;
+    // Collect all estimated selectivities.
+    List<Double> selectivities = Lists.newArrayList();
     for (Expr e: conjuncts_) {
-      if (e.getSelectivity() < 0) continue;
-      prod *= e.getSelectivity();
+      if (e.hasSelectivity()) selectivities.add(e.getSelectivity());
     }
-    return prod;
+    if (selectivities.size() != conjuncts_.size()) {
+      // Some conjuncts have no estimated selectivity. Use a single default
+      // representative selectivity for all those conjuncts.
+      selectivities.add(Expr.DEFAULT_SELECTIVITY);
+    }
+    // Sort the selectivities to get a consistent estimate, regardless of the original
+    // conjunct order. Sort in ascending order such that the most selective conjunct
+    // is fully applied.
+    Collections.sort(selectivities);
+    double result = 1.0;
+    for (int i = 0; i < selectivities.size(); ++i) {
+      // Exponential backoff for each selectivity multiplied into the final result.
+      result *= Math.pow(selectivities.get(i), 1.0 / (double) (i + 1));
+    }
+    // Bound result in [0, 1]
+    return Math.max(0.0, Math.min(1.0, result));
   }
 
   // Convert this plan node into msg (excluding children), which requires setting
@@ -577,5 +600,25 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
       sum = addCardinalities(sum, tmp);
     }
     return sum;
+  }
+
+  protected void addRuntimeFilter(RuntimeFilter filter) { runtimeFilters_.add(filter); }
+
+  protected Collection<RuntimeFilter> getRuntimeFilters() { return runtimeFilters_; }
+
+  protected String getRuntimeFilterExplainString(boolean isBuildNode) {
+    if (runtimeFilters_.isEmpty()) return "";
+    final String applyNodeFilterFormat = "%s -> %s";
+    final String buildNodeFilterFormat = "%s <- %s";
+    String format = isBuildNode ? buildNodeFilterFormat : applyNodeFilterFormat;
+    StringBuilder output = new StringBuilder();
+    List<String> filtersStr = Lists.newArrayList();
+    for (RuntimeFilter filter: runtimeFilters_) {
+      Expr expr =
+          (isBuildNode) ? filter.getSrcExpr() : filter.getTargetExpr();
+      filtersStr.add(String.format(format, filter.getFilterId(), expr.toSql()));
+    }
+    output.append(Joiner.on(", ").join(filtersStr) + "\n");
+    return output.toString();
   }
 }

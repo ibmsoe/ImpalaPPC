@@ -46,7 +46,6 @@ struct TSlotDescriptor {
   7: required i32 nullIndicatorByte
   8: required i32 nullIndicatorBit
   9: required i32 slotIdx
-  10: required bool isMaterialized
 }
 
 struct TColumnDescriptor {
@@ -65,6 +64,7 @@ struct TTableDescriptor {
   5: optional CatalogObjects.THdfsTable hdfsTable
   6: optional CatalogObjects.THBaseTable hbaseTable
   9: optional CatalogObjects.TDataSourceTable dataSourceTable
+  10: optional CatalogObjects.TKuduTable kuduTable
 
   // Unqualified name of table
   7: required string tableName

@@ -176,7 +176,7 @@ public class HBaseTable extends Table {
       admin = connection.getAdmin();
       clusterStatus = admin.getClusterStatus();
     } finally {
-      admin.close();
+      if (admin != null) admin.close();
     }
     return clusterStatus;
   }
@@ -322,10 +322,11 @@ public class HBaseTable extends Table {
    * to hdfs tables since we typically need to understand all columns to make sense
    * of the file at all.
    */
-  public void load(Table oldValue, HiveMetaStoreClient client,
+  public void load(boolean reuseMetadata, HiveMetaStoreClient client,
       org.apache.hadoop.hive.metastore.api.Table msTbl) throws TableLoadingException {
     Preconditions.checkNotNull(getMetaStoreTable());
     try {
+      msTable_ = msTbl;
       hbaseTableName_ = getHBaseTableName(getMetaStoreTable());
       // Warm up the connection and verify the table exists.
       getHBaseTable().close();
@@ -623,7 +624,7 @@ public class HBaseTable extends Table {
       LOG.error("Error computing HBase row count estimate", ioe);
       return new Pair<Long, Long>(-1l, -1l);
     } finally {
-      closeHBaseTable(table);
+      if (table != null) closeHBaseTable(table);
     }
     return new Pair<Long, Long>(rowCount, rowSize);
   }
@@ -640,7 +641,7 @@ public class HBaseTable extends Table {
     // server. This shouldn't normally happen.
     if (serverLoad == null) {
       LOG.error("Unable to find load for server: " + location.getServerName() +
-          " for location " + info.getRegionName());
+          " for location " + info.getRegionNameAsString());
       return 0;
     }
     RegionLoad regionLoad = serverLoad.getRegionsLoad().get(info.getRegionName());

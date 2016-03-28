@@ -251,27 +251,16 @@ class LlvmCodeGen {
   /// false, the module will not be optimized before compilation.
   Status FinalizeModule();
 
-  /// Replaces all instructions that call 'target_name' with a call instruction
-  /// to the new_fn.  Returns the modified function.
-  /// - target_name is the unmangled function name that should be replaced.
-  ///   The name is assumed to be unmangled so all call sites that contain the
-  ///   replace_name substring will be replaced. target_name is case-sensitive
-  ///   TODO: be more strict than substring? work out the mangling rules?
-  /// - If update_in_place is true, the caller function will be modified in place.
-  ///   Otherwise, the caller function will be cloned and the original function
-  ///   is unmodified.  If update_in_place is false and the function is already
-  ///   been dynamically linked, the existing function will be unlinked. Note that
-  ///   this is very unthread-safe, if there are threads in the function to be unlinked,
-  ///   bad things will happen.
-  /// - 'num_replaced' returns the number of call sites updated
-  //
-  /// Most of our use cases will likely not be in place.  We will have one 'template'
-  /// version of the function loaded for each type of Node (e.g. AggregationNode).
-  /// Each instance of the node will clone the function, replacing the inner loop
-  /// body with the codegened version.  The codegened bodies differ from instance
-  /// to instance since they are specific to the node's tuple desc.
-  llvm::Function* ReplaceCallSites(llvm::Function* caller, bool update_in_place,
-      llvm::Function* new_fn, const std::string& target_name, int* num_replaced);
+  /// Replaces all instructions in 'caller' that call 'target_name' with a call instruction
+  /// to 'new_fn'.  Returns the number of call sites updated.
+  ///
+  /// 'target_name' must be a substring of the mangled symbol of the function to be
+  /// replaced. This usually means that the unmangled function name is sufficient.
+  ///
+  /// Note that this modifies 'caller' in-place, so this should only be called on cloned
+  /// functions.
+  int ReplaceCallSites(llvm::Function* caller, llvm::Function* new_fn,
+      const std::string& target_name);
 
   /// Returns a copy of fn. The copy is added to the module.
   llvm::Function* CloneFunction(llvm::Function* fn);
@@ -330,9 +319,11 @@ class LlvmCodeGen {
   /// function is invalid.
   bool VerifyFunction(llvm::Function* function);
 
-  /// This will generate a printf call instruction to output 'message' at the
-  /// builder's insert point.  Only for debugging.
-  void CodegenDebugTrace(LlvmBuilder* builder, const char* message);
+  /// This will generate a printf call instruction to output 'message' at the builder's
+  /// insert point. If 'v1' is non-NULL, it will also be passed to the printf call. Only
+  /// for debugging.
+  void CodegenDebugTrace(LlvmBuilder* builder, const char* message,
+      llvm::Value* v1 = NULL);
 
   /// Returns the string representation of a llvm::Value* or llvm::Type*
   template <typename T> static std::string Print(T* value_or_type) {
@@ -345,9 +336,14 @@ class LlvmCodeGen {
   /// Returns the libc function, adding it to the module if it has not already been.
   llvm::Function* GetLibCFunction(FnPrototype* prototype);
 
-  /// Returns the cross compiled function. IRFunction::Type is an enum which is
-  /// defined in 'impala-ir/impala-ir-functions.h'
-  llvm::Function* GetFunction(IRFunction::Type);
+  /// Returns the cross compiled function. IRFunction::Type is an enum which is generated
+  /// by gen_ir_descriptions.py.
+  ///
+  /// If 'clone' is true, a clone of the function will be returned. Clones should be used
+  /// iff the caller will modify the returned function. This avoids clobbering the
+  /// function in case other users need it, but we don't clone if we can avoid it to
+  /// reduce compilation time.
+  llvm::Function* GetFunction(IRFunction::Type, bool clone);
 
   /// Returns the hash function with signature:
   ///   int32_t Hash(int8_t* data, int len, int32_t seed);
@@ -385,8 +381,11 @@ class LlvmCodeGen {
   /// c-code and code-generated IR.  The resulting value will be of 'type'.
   llvm::Value* CastPtrToLlvmPtr(llvm::Type* type, const void* ptr);
 
-  /// Returns the constant 'val' of 'type'
+  /// Returns the constant 'val' of 'type'.
   llvm::Value* GetIntConstant(PrimitiveType type, int64_t val);
+
+  /// Returns the constant 'val' of the int type of size 'byte_size'.
+  llvm::Value* GetIntConstant(int byte_size, int64_t val);
 
   /// Returns true/false constants (bool type)
   llvm::Value* true_value() { return true_value_; }
@@ -497,8 +496,8 @@ class LlvmCodeGen {
   /// Time spent compiling the module.
   RuntimeProfile::Counter* compile_timer_;
 
-  /// Total size of modules loaded from disk.
-  RuntimeProfile::Counter* module_file_size_;
+  /// Total size of bitcode modules loaded in bytes.
+  RuntimeProfile::Counter* module_bitcode_size_;
 
   /// whether or not optimizations are enabled
   bool optimizations_enabled_;
@@ -529,8 +528,7 @@ class LlvmCodeGen {
 
   /// Keeps track of all the functions that have been jit compiled and linked into
   /// the process. Special care needs to be taken if we need to modify these functions.
-  /// bool is unused.
-  std::map<llvm::Function*, bool> jitted_functions_;
+  std::set<llvm::Function*> jitted_functions_;
 
   /// Lock protecting jitted_functions_
   boost::mutex jitted_functions_lock_;
@@ -568,10 +566,6 @@ class LlvmCodeGen {
 
   /// The vector of functions to automatically JIT compile after FinalizeModule().
   std::vector<std::pair<llvm::Function*, void**> > fns_to_jit_compile_;
-
-  /// Debug utility that will insert a printf-like function into the generated
-  /// IR.  Useful for debugging the IR.  This is lazily created.
-  llvm::Function* debug_trace_fn_;
 
   /// Debug strings that will be outputted by jitted code.  This is a copy of all
   /// strings passed to CodegenDebugTrace.

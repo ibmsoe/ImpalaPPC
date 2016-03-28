@@ -21,8 +21,9 @@
 
 #include <boost/lexical_cast.hpp>
 
-#include "common/logging.h"
+#include "codegen/impala-ir.h"
 #include "common/compiler-util.h"
+#include "common/logging.h"
 #include "gen-cpp/Status_types.h"  // for TStatus
 #include "gen-cpp/ErrorCodes_types.h"  // for TErrorCode
 #include "gen-cpp/TCLIService_types.h" // for HS2 TStatus
@@ -82,10 +83,10 @@ class Status {
  public:
   typedef strings::internal::SubstituteArg ArgType;
 
-  Status(): msg_(NULL) {}
+  ALWAYS_INLINE Status(): msg_(NULL) {}
 
   // Return a default constructed Status instance in the OK case.
-  inline static Status OK() { return Status(); }
+  static ALWAYS_INLINE Status OK() { return Status(); }
 
   // Return a MEM_LIMIT_EXCEEDED error status.
   static Status MemLimitExceeded();
@@ -94,8 +95,9 @@ class Status {
   static const Status DEPRECATED_RPC;
 
   /// Copy c'tor makes copy of error detail so Status can be returned by value.
-  Status(const Status& status)
-    : msg_(status.msg_ != NULL ? new ErrorMsg(*status.msg_) : NULL) { }
+  ALWAYS_INLINE Status(const Status& status) : msg_(NULL) {
+    if (UNLIKELY(status.msg_ != NULL)) CopyMessageFrom(status);
+  }
 
   /// Status using only the error code as a parameter. This can be used for error messages
   /// that don't take format parameters.
@@ -143,19 +145,20 @@ class Status {
   static Status Expected(const ErrorMsg& e);
   static Status Expected(const std::string& error_msg);
 
-  ~Status() {
-    if (msg_ != NULL) delete msg_;
+  /// same as copy c'tor
+  ALWAYS_INLINE Status& operator=(const Status& status) {
+    // Take the slow path if either Status objects have non-NULL messages (unless they
+    // are aliases).
+    if (UNLIKELY(msg_ != status.msg_)) CopyMessageFrom(status);
+    return *this;
   }
 
-  /// same as copy c'tor
-  Status& operator=(const Status& status) {
-    delete msg_;
-    if (LIKELY(status.msg_ == NULL)) {
-      msg_ = NULL;
-    } else {
-      msg_ = new ErrorMsg(*status.msg_);
-    }
-    return *this;
+  ALWAYS_INLINE ~Status() {
+    // The UNLIKELY and inlining here are important hints for the compiler to
+    // streamline the common case of Status::OK(). Use FreeMessage() which is
+    // not inlined to free the message. This avoids potential code bloat due
+    // to duplicated code from the delete statement.
+    if (UNLIKELY(msg_ != NULL)) FreeMessage();
   }
 
   /// "Copy" c'tor from TStatus.
@@ -174,7 +177,7 @@ class Status {
   /// Retains the TErrorCode value and the message
   Status& operator=(const apache::hive::service::cli::thrift::TStatus& hs2_status);
 
-  bool ok() const { return msg_ == NULL; }
+  bool ALWAYS_INLINE ok() const { return msg_ == NULL; }
 
   bool IsCancelled() const {
     return msg_ != NULL && msg_->error() == TErrorCode::CANCELLED;
@@ -238,6 +241,12 @@ class Status {
   Status(const ErrorMsg& error_msg, bool silent);
   Status(const std::string& error_msg, bool silent);
 
+  // A non-inline function for copying status' message.
+  void CopyMessageFrom(const Status& status);
+
+  // A non-inline function for freeing status' message.
+  void FreeMessage();
+
   /// Status uses a naked pointer to ensure the size of an instance on the stack is only
   /// the sizeof(ErrorMsg*). Every Status owns its ErrorMsg instance.
   ErrorMsg* msg_;
@@ -250,6 +259,15 @@ class Status {
     if (UNLIKELY(!__status__.ok())) return __status__; \
   } while (false)
 
+#define RETURN_IF_ERROR_PREPEND(expr, prepend) \
+  do { \
+    Status __status__ = (stmt); \
+    if (UNLIKELY(!__status__.ok())) { \
+      return Status(strings::Substitute("$0: $1", prepend, __status__.GetDetail())); \
+    } \
+  } while (false)
+
+
 #define EXIT_IF_ERROR(stmt) \
   do { \
     Status __status__ = (stmt); \
@@ -258,12 +276,11 @@ class Status {
     } \
   } while (false)
 
+// LOG(FATAL) will call abort().
 #define EXIT_WITH_ERROR(msg) \
   do { \
-    LOG(ERROR) << msg; \
-    exit(1); \
+    LOG(FATAL) << msg << ". Impalad exiting.\n"; \
   } while (false)
-
 }
 
 #endif

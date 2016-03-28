@@ -18,9 +18,10 @@
 # as creation of the Hive metastore.
 
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
 CREATE_METASTORE=0
+CREATE_SENTRY_POLICY_DB=0
 : ${IMPALA_KERBERIZE=}
 
 # parse command line options
@@ -30,12 +31,16 @@ do
     -create_metastore)
       CREATE_METASTORE=1
       ;;
+    -create_sentry_policy_db)
+      CREATE_SENTRY_POLICY_DB=1
+      ;;
     -k|-kerberize|-kerberos|-kerb)
       # This could also come in through the environment...
       export IMPALA_KERBERIZE=1
       ;;
     -help|*)
       echo "[-create_metastore] : If true, creates a new metastore."
+      echo "[-create_sentry_policy_db] : If true, creates a new sentry policy db."
       echo "[-kerberize] : Enable kerberos on the cluster"
       exit 1
       ;;
@@ -47,10 +52,6 @@ if [ "${IMPALA_CONFIG_SOURCED}" != "1" ]; then
   echo "You must source bin/impala-config.sh"
   exit 1
 fi
-
-# If a specific metastore db is defined, use that. Otherwise create unique metastore
-# DB name based on the current directory.
-: ${METASTORE_DB=`basename ${IMPALA_HOME} | sed -e "s/\\./_/g" | sed -e "s/[.-]/_/g"`}
 
 ${CLUSTER_DIR}/admin create_cluster
 
@@ -70,14 +71,12 @@ else
   export HIVE_S2_AUTH=NOSASL
 fi
 
-# Convert Metastore DB name to be lowercase
-export METASTORE_DB=`echo $METASTORE_DB | tr '[A-Z]' '[a-z]'`
 export CURRENT_USER=`whoami`
 
 CONFIG_DIR=${IMPALA_HOME}/fe/src/test/resources
 echo "Config dir: ${CONFIG_DIR}"
 echo "Current user: ${CURRENT_USER}"
-echo "Metastore DB: hive_${METASTORE_DB}"
+echo "Metastore DB: ${METASTORE_DB}"
 
 pushd ${CONFIG_DIR}
 # Cleanup any existing files
@@ -86,24 +85,22 @@ rm -f authz-provider.ini
 
 if [ $CREATE_METASTORE -eq 1 ]; then
   echo "Creating postgresql database for Hive metastore"
-  set +o errexit
-  dropdb -U hiveuser hive_$METASTORE_DB
-  set -e
-  createdb -U hiveuser hive_$METASTORE_DB
+  dropdb -U hiveuser ${METASTORE_DB} 2> /dev/null || true
+  createdb -U hiveuser ${METASTORE_DB}
 
-  psql -U hiveuser -d hive_$METASTORE_DB \
+  psql -q -U hiveuser -d ${METASTORE_DB} \
        -f ${HIVE_HOME}/scripts/metastore/upgrade/postgres/hive-schema-0.13.0.postgres.sql
   # Increase the size limit of PARAM_VALUE from SERDE_PARAMS table to be able to create
   # HBase tables with large number of columns.
   echo "alter table \"SERDE_PARAMS\" alter column \"PARAM_VALUE\" type character varying" \
-      | psql -U hiveuser -d hive_$METASTORE_DB
+      | psql -q -U hiveuser -d ${METASTORE_DB}
 fi
 
-set +e
-echo "Creating Sentry Policy Server DB"
-dropdb -U hiveuser sentry_policy
-createdb -U hiveuser sentry_policy
-set -e
+if [ $CREATE_SENTRY_POLICY_DB -eq 1 ]; then
+  echo "Creating Sentry Policy Server DB"
+  dropdb -U hiveuser sentry_policy 2> /dev/null || true
+  createdb -U hiveuser sentry_policy
+fi
 
 # Perform search-replace on $1, output to $2.
 # Search $1 ($GCIN) for strings that look like "${FOO}".  If FOO is defined in
@@ -155,6 +152,7 @@ if ${CLUSTER_DIR}/admin is_kerberized; then
 fi
 
 generate_config postgresql-hive-site.xml.template hive-site.xml
+generate_config log4j.properties.template log4j.properties
 generate_config hive-log4j.properties.template hive-log4j.properties
 generate_config hbase-site.xml.template hbase-site.xml
 generate_config authz-policy.ini.template authz-policy.ini

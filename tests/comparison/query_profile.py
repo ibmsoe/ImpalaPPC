@@ -15,7 +15,7 @@
 from logging import getLogger
 from random import choice, randint, random
 
-from tests.comparison.types import (
+from db_types import (
     Boolean,
     Char,
     Decimal,
@@ -23,8 +23,22 @@ from tests.comparison.types import (
     Int,
     TYPES,
     Timestamp)
-from tests.comparison.funcs import WindowBoundary
-from tests.comparison.data_generator import RandomValGenerator
+from funcs import (
+    And,
+    Equals,
+    GreaterThan,
+    GreaterThanOrEquals,
+    In,
+    IsDistinctFrom,
+    IsNotDistinctFrom,
+    IsNotDistinctFromOp,
+    LessThan,
+    LessThanOrEquals,
+    NotEquals,
+    NotIn,
+    Or,
+    WindowBoundary)
+from random_val_generator import RandomValGenerator
 
 UNBOUNDED_PRECEDING = WindowBoundary.UNBOUNDED_PRECEDING
 PRECEDING = WindowBoundary.PRECEDING
@@ -63,6 +77,21 @@ class DefaultProfile(object):
             Float: 1,
             Int: 10,
             Timestamp: 1},
+        'RELATIONAL_FUNCS': {
+            Equals: 40,
+            GreaterThan: 2,
+            GreaterThanOrEquals: 2,
+            In: 2,
+            IsDistinctFrom: 2,
+            IsNotDistinctFrom: 1,
+            IsNotDistinctFromOp: 1,
+            LessThan: 2,
+            LessThanOrEquals: 2,
+            NotEquals: 2,
+            NotIn: 2},
+        'CONJUNCT_DISJUNCTS': {
+            And: 5,
+            Or: 1},
         'ANALYTIC_WINDOW': {
             ('ROWS', UNBOUNDED_PRECEDING, None): 1,
             ('ROWS', UNBOUNDED_PRECEDING, PRECEDING): 2,
@@ -161,6 +190,8 @@ class DefaultProfile(object):
             'INLINE_VIEW': 0.1,   # MAX_NESTED_QUERY_COUNT bounds take precedence
             'SELECT_DISTINCT': 0.1,
             'SCALAR_SUBQUERY': 0.1,
+            'ONLY_USE_EQUALITY_JOIN_PREDICATES': 0.8,
+            'ONLY_USE_AGGREGATES_IN_HAVING_CLAUSE': 0.7,
             'UNION_ALL': 0.5}}   # Determines use of "ALL" but not "UNION"
 
     self.__type_weights = {}
@@ -231,6 +262,12 @@ class DefaultProfile(object):
   def use_with_clause(self):
     return self._decide_from_probability('OPTIONAL_QUERY_CLAUSES', 'WITH')
 
+  def only_use_equality_join_predicates(self):
+    return self._decide_from_probability('MISC', 'ONLY_USE_EQUALITY_JOIN_PREDICATES')
+
+  def only_use_aggregates_in_having_clause(self):
+    return self._decide_from_probability('MISC', 'ONLY_USE_AGGREGATES_IN_HAVING_CLAUSE')
+
   def get_with_clause_table_ref_count(self):
     '''Return the number of table ref entries a WITH clause should contain.'''
     return self._choose_from_bounds('WITH_TABLE_COUNT')
@@ -276,8 +313,8 @@ class DefaultProfile(object):
     return self._choose_from_filtered_weights(
         lambda join_type: join_type in join_types, 'JOIN')
 
-  def get_join_condition_count(self):
-    return self._choose_from_bounds('MAX_NESTED_EXPR_COUNT')
+  def choose_join_condition_count(self):
+    return max(1, self._choose_from_bounds('MAX_NESTED_EXPR_COUNT'))
 
   def use_where_clause(self):
     return self._decide_from_probability('OPTIONAL_QUERY_CLAUSES', 'WHERE')
@@ -328,6 +365,15 @@ class DefaultProfile(object):
   def use_nested_with(self):
     return True
 
+  def use_lateral_join(self):
+    return False
+
+  def use_boolean_expr_for_lateral_join(self):
+    return False
+
+  def get_num_boolean_exprs_for_lateral_join(self):
+    return False
+
   # Workaround for Hive null ordering differences, and lack of 'NULL FIRST', 'NULL LAST'
   # specifications. The ref db will order nulls as specified for ASC sorting to make it
   # identifical to Hive. Valid return values are: 'BEFORE', 'AFTER', or 'DEFAULT',
@@ -362,60 +408,100 @@ class DefaultProfile(object):
       raise Exception('None of the requested types are enabled')
     return self._choose_from_weights(weights)
 
-  def choose_func_signature(self, signatures):
+  def choose_conjunct_disjunct_fill_ratio(self):
+    '''Return the ratio of ANDs and ORs to use in a boolean function tree. For example,
+       when creating a WHERE condition that consists of 10 nested functions, a ratio of
+       0.1 means 1 out of the 10 functions in the WHERE clause will be an AND or OR.
+    '''
+    return random() * random()
+
+  def choose_relational_func_fill_ratio(self):
+    '''Return the ratio of relational functions to use in a boolean function tree. This
+       ratio is applied after 'choose_conjunct_disjunct_fill_ratio()'.
+    '''
+    return random() * random()
+
+  def choose_conjunct_disjunct(self):
+    return self._choose_from_weights('CONJUNCT_DISJUNCTS')
+
+  def choose_relational_func_signature(self, signatures):
+    '''Return a relational signature chosen from "signatures". A signature is considered
+       to be relational if it returns a boolean and accepts more than one argument.
+    '''
+    if not signatures:
+      raise Exception('At least one signature is required')
+    signatures = filter(
+        lambda s: s.return_type == Boolean \
+            and len(s.args) > 1 \
+            and not any(a.is_subquery for a in s.args),
+        signatures)
+    if not signatures:
+      raise Exception(
+          'None of the provided signatures corresponded to a relational function')
+    func_weights = self.weights('RELATIONAL_FUNCS')
+    missing_funcs = set(s.func for s in signatures) - set(func_weights)
+    if missing_funcs:
+      raise Exception("Weights are missing for functions: %s"
+          % ", ".join([missing_funcs]))
+    return self.choose_func_signature(signatures, self.weights('RELATIONAL_FUNCS'))
+
+  def choose_func_signature(self, signatures, _func_weights=None):
     '''Return a signature chosen from "signatures".'''
     if not signatures:
       raise Exception('At least one signature is required')
 
     type_weights = self.weights('TYPES')
-    # First a function will be chosen then a signature. This is done so that the number
-    # of signatures a function has doesn't influence its likelihood of being chosen.
-    # Functions will be weighted based on the weight of the types in their arguments.
-    # The weights will be normalized by the number of arguments in the signature. The
-    # weight of a function will be the maximum weight out of all of it's signatures.
-    # If any signature has a type with a weight of zero, the signature will not be used.
-    #
-    # Example: type_weights = {Int: 10, Float: 1},
-    #          funcs = [foo(Int), foo(Float), bar(Int, Float)]
-    #
-    #          max signature length = 2   # from bar(Int, Float)
-    #          weight of foo(Int) = (10 * 2)
-    #          weight of foo(Float) = (1 * 2)
-    #          weight of bar(Int, Float) = ((10 + 1) * 1)
-    #          func_weights = {foo: 20, bar: 11}
-    #
-    # Note that this only selects a function, the function signature will be selected
-    # later. This is done to prevent function with a greater number of signatures from
-    # being selected more frequently.
-    func_weights = dict()
-    # The length of the signature in func_weights
-    signature_length_by_func = dict()
-    for signature in signatures:
-      signature_weight = type_weights[signature.return_type]
-      signature_length = 1
-      for arg in signature.args:
-        if arg.is_subquery:
-          for subtype in arg.type:
-            signature_weight *= type_weights[subtype]
-            signature_length += 1
-        else:
-          signature_weight *= type_weights[arg.type]
-          signature_length += 1
-      if not signature_weight:
-        continue
-      if not signature.func in func_weights \
-          or signature_weight > func_weights[signature.func]:
-        func_weights[signature.func] = signature_weight
-        signature_length_by_func[signature.func] = signature_length
+
+    func_weights = _func_weights
     if not func_weights:
-      raise Exception('All functions disallowed based on signature types')
-    distinct_signature_lengths = set(signature_length_by_func.values())
-    for func, weight in func_weights.iteritems():
-      signature_length = signature_length_by_func[func]
-      func_weights[func] = reduce(
-          lambda x, y: x * y,
-          distinct_signature_lengths - set([signature_length]),
-          func_weights[func])
+      # First a function will be chosen then a signature. This is done so that the number
+      # of signatures a function has doesn't influence its likelihood of being chosen.
+      # Functions will be weighted based on the weight of the types in their arguments.
+      # The weights will be normalized by the number of arguments in the signature. The
+      # weight of a function will be the maximum weight out of all of it's signatures.
+      # If any signature has a type with a weight of zero, the signature will not be used.
+      #
+      # Example: type_weights = {Int: 10, Float: 1},
+      #          funcs = [foo(Int), foo(Float), bar(Int, Float)]
+      #
+      #          max signature length = 2   # from bar(Int, Float)
+      #          weight of foo(Int) = (10 * 2)
+      #          weight of foo(Float) = (1 * 2)
+      #          weight of bar(Int, Float) = ((10 + 1) * 1)
+      #          func_weights = {foo: 20, bar: 11}
+      #
+      # Note that this only selects a function, the function signature will be selected
+      # later. This is done to prevent function with a greater number of signatures from
+      # being selected more frequently.
+      func_weights = dict()
+      # The length of the signature in func_weights
+      signature_length_by_func = dict()
+      for signature in signatures:
+        signature_weight = type_weights[signature.return_type]
+        signature_length = 1
+        for arg in signature.args:
+          if arg.is_subquery:
+            for subtype in arg.type:
+              signature_weight *= type_weights[subtype]
+              signature_length += 1
+          else:
+            signature_weight *= type_weights[arg.type]
+            signature_length += 1
+        if not signature_weight:
+          continue
+        if signature.func not in func_weights \
+            or signature_weight > func_weights[signature.func]:
+          func_weights[signature.func] = signature_weight
+          signature_length_by_func[signature.func] = signature_length
+      if not func_weights:
+        raise Exception('All functions disallowed based on signature types')
+      distinct_signature_lengths = set(signature_length_by_func.values())
+      for func, weight in func_weights.iteritems():
+        signature_length = signature_length_by_func[func]
+        func_weights[func] = reduce(
+            lambda x, y: x * y,
+            distinct_signature_lengths - set([signature_length]),
+            func_weights[func])
     func = self._choose_from_weights(func_weights)
 
     # Same idea as above but for the signatures of the selected function.
@@ -459,6 +545,7 @@ class DefaultProfile(object):
         return False
     return True
 
+
 class ImpalaNestedTypesProfile(DefaultProfile):
 
   def __init__(self):
@@ -485,6 +572,18 @@ class ImpalaNestedTypesProfile(DefaultProfile):
     while random() < (0.85 ** num):
       num += 1
     return num
+
+
+# This profile was added for ad-hoc testing.
+class TestFunctionProfile(DefaultProfile):
+
+  def choose_func_signature(self, signatures):
+    if not signatures:
+      raise Exception('At least one signature is required')
+    preferred_signatures = filter(lambda s: "DistinctFrom" in s.func._NAME, signatures)
+    if preferred_signatures:
+      signatures = preferred_signatures
+    return super(TestFunctionProfile, self).choose_func_signature(signatures)
 
 
 class HiveProfile(DefaultProfile):

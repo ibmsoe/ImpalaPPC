@@ -55,7 +55,7 @@ class ExecNode {
   /// Initializes this object from the thrift tnode desc. The subclass should
   /// do any initialization that can fail in Init() rather than the ctor.
   /// If overridden in subclass, must first call superclass's Init().
-  virtual Status Init(const TPlanNode& tnode);
+  virtual Status Init(const TPlanNode& tnode, RuntimeState* state);
 
   /// Sets up internal structures, etc., without doing any actual work.
   /// Must be called prior to Open(). Will only be called once in this
@@ -69,8 +69,6 @@ class ExecNode {
   /// Performs any preparatory work prior to calling GetNext().
   /// Caller must not be holding any io buffers. This will cause deadlock.
   /// If overridden in subclass, must first call superclass's Open().
-  /// If a parent exec node adds slot filters (see RuntimeState::AddBitmapFilter()),
-  /// they need to be added before calling Open() on the child that will consume them.
   /// Open() is called after Prepare() or Reset(), i.e., possibly multiple times
   /// throughout the lifetime of this node.
   virtual Status Open(RuntimeState* state);
@@ -121,10 +119,10 @@ class ExecNode {
   virtual void Close(RuntimeState* state);
 
   /// Creates exec node tree from list of nodes contained in plan via depth-first
-  /// traversal. All nodes are placed in pool and have Init() called on them.
+  /// traversal. All nodes are placed in state->obj_pool() and have Init() called on them.
   /// Returns error if 'plan' is corrupted, otherwise success.
-  static Status CreateTree(ObjectPool* pool, const TPlan& plan,
-                           const DescriptorTbl& descs, ExecNode** root);
+  static Status CreateTree(RuntimeState* state, const TPlan& plan,
+      const DescriptorTbl& descs, ExecNode** root);
 
   /// Set debug action for node with given id in 'tree'
   static void SetDebugOptions(int node_id, TExecNodePhase::type phase,
@@ -142,11 +140,11 @@ class ExecNode {
   /// out how to deal with declaring a templated std:vector type in IR
   static bool EvalConjuncts(ExprContext* const* ctxs, int num_ctxs, TupleRow* row);
 
-  /// Returns a codegen'd version of EvalConjuncts(), or NULL if the function couldn't be
+  /// Codegen EvalConjuncts(). Returns a non-OK status if the function couldn't be
   /// codegen'd. The codegen'd version uses inlined, codegen'd GetBooleanVal() functions.
-  static llvm::Function* CodegenEvalConjuncts(
+  static Status CodegenEvalConjuncts(
       RuntimeState* state, const std::vector<ExprContext*>& conjunct_ctxs,
-      const char* name = "EvalConjuncts");
+      llvm::Function** fn, const char* name = "EvalConjuncts");
 
   /// Returns a string representation in DFS order of the plan rooted at this.
   std::string DebugString() const;
@@ -203,6 +201,13 @@ class ExecNode {
 
     /// Adds a batch to the queue. This is blocking if the queue is full.
     void AddBatch(RowBatch* batch);
+
+    /// Adds a batch to the queue. If the queue is full, this blocks until space becomes
+    /// available or 'timeout_micros' has elapsed.
+    /// Returns true if the element was added to the queue, false if it wasn't. If this
+    /// method returns false, the queue didn't take ownership of the batch and it must be
+    /// managed externally.
+    bool AddBatchWithTimeout(RowBatch* batch, int64_t timeout_micros);
 
     /// Gets a row batch from the queue. Returns NULL if there are no more.
     /// This function blocks.
@@ -268,10 +273,11 @@ class ExecNode {
 
   /// Create a single exec node derived from thrift node; place exec node in 'pool'.
   static Status CreateNode(ObjectPool* pool, const TPlanNode& tnode,
-                           const DescriptorTbl& descs, ExecNode** node);
+      const DescriptorTbl& descs, ExecNode** node, RuntimeState* state);
 
-  static Status CreateTreeHelper(ObjectPool* pool, const std::vector<TPlanNode>& tnodes,
-      const DescriptorTbl& descs, ExecNode* parent, int* node_idx, ExecNode** root);
+  static Status CreateTreeHelper(RuntimeState* state,
+      const std::vector<TPlanNode>& tnodes, const DescriptorTbl& descs, ExecNode* parent,
+      int* node_idx, ExecNode** root);
 
   virtual bool IsScanNode() const { return false; }
 
@@ -283,6 +289,19 @@ class ExecNode {
 
   /// Appends option to 'runtime_exec_options_'
   void AddRuntimeExecOption(const std::string& option);
+
+  /// Helper wrapper around AddRuntimeExecOption() for adding "Codegen Enabled" or
+  /// "Codegen Disabled" exec options. If specified, 'extra_info' is appended to the exec
+  /// option, and 'extra_label' is prepended to the exec option.
+  void AddCodegenExecOption(bool codegen_enabled, const string& extra_info = "",
+      const string& extra_label = "");
+
+  /// Helper wrapper that takes a status optionally describing why codegen was
+  /// disabled. 'codegen_status' can be OK.
+  void AddCodegenExecOption(bool codegen_enabled, const Status& codegen_status,
+      const string& extra_label = "") {
+    AddCodegenExecOption(codegen_enabled, codegen_status.GetDetail(), extra_label);
+  }
 
   /// Frees any local allocations made by expr_ctxs_to_free_ and returns the result of
   /// state->CheckQueryState(). Nodes should call this periodically, e.g. once per input
@@ -316,4 +335,3 @@ class ExecNode {
 
 }
 #endif
-

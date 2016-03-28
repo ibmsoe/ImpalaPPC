@@ -15,7 +15,6 @@
 #ifndef IMPALA_RUNTIME_COLLECTION_VALUE_H
 #define IMPALA_RUNTIME_COLLECTION_VALUE_H
 
-#include "runtime/mem-pool.h"
 #include "runtime/descriptors.h"
 
 namespace impala {
@@ -37,7 +36,7 @@ struct CollectionValue {
   /// Returns the size of this collection in bytes, i.e. the number of bytes written to
   /// ptr.
   inline int64_t ByteSize(const TupleDescriptor& item_tuple_desc) const {
-    return num_tuples * item_tuple_desc.byte_size();
+    return static_cast<int64_t>(num_tuples) * item_tuple_desc.byte_size();
   }
 };
 

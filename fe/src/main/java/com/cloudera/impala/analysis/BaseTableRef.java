@@ -46,9 +46,11 @@ public class BaseTableRef extends TableRef {
    */
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
+    if (isAnalyzed_) return;
     Preconditions.checkNotNull(getPrivilegeRequirement());
     desc_ = analyzer.registerTableRef(this);
     isAnalyzed_ = true;
+    analyzeHints(analyzer);
     analyzeJoin(analyzer);
   }
 
@@ -59,8 +61,10 @@ public class BaseTableRef extends TableRef {
     String aliasSql = null;
     String alias = getExplicitAlias();
     if (alias != null) aliasSql = ToSqlUtils.getIdentSql(alias);
+    String tableHintsSql = ToSqlUtils.getPlanHintsSql(tableHints_);
     return getTable().getTableName().toSql() +
-        ((aliasSql != null) ? " " + aliasSql : "");
+        ((aliasSql != null) ? " " + aliasSql : "") +
+        (tableHintsSql != "" ? " " + tableHintsSql : "");
   }
 
   public String debugString() { return tableRefToSql(); }

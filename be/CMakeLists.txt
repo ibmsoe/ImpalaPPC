@@ -33,12 +33,17 @@ PROJECT(ASSEMBLER)
 #       is unsafe to do if the code uses casts (which we obviously do).
 #  -Wno-unknown-pragmas: suppress warnings for unknown (compiler specific) pragmas
 #  -Wno-deprecated: gutil contains deprecated headers
+#  -Wno-vla: we use C99-style variable-length arrays
 #  -pthread: enable multithreaded malloc
 #  -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG: enable nanosecond precision for boost
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wall -Wno-sign-compare -Wno-unknown-pragmas -pthread")
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -fno-strict-aliasing")
-SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wno-deprecated")
+SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -std=c++14")
+SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wno-deprecated -Wno-vla")
 SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG -mpower8-vector")
+IF($ENV{USE_GOLD_LINKER} STREQUAL "true")
+  SET(CXX_COMMON_FLAGS "${CXX_COMMON_FLAGS} -Wl,-fuse-ld=gold")
+ENDIF()
 
 # On Apple we build with clang and need libstdc++ instead of libc++
 if (APPLE)
@@ -67,26 +72,20 @@ SET(CXX_GCC_FLAGS "-g -Wno-unused-local-typedefs -mpower8-vector")
 #
 # Debug information is stored as dwarf2 to be as compatible as possible
 SET(CXX_FLAGS_DEBUG "${CXX_GCC_FLAGS} -ggdb -gdwarf-2")
+if (IMPALA_TOOLCHAIN)
+  # -Werror: compile warnings should be errors when using the toolchain compiler.
+  #   Only enable for debug builds because this is what we test in pre-commit tests.
+  SET(CXX_FLAGS_DEBUG "${CXX_FLAGS_DEBUG} -Werror")
+endif()
 SET(CXX_FLAGS_RELEASE "${CXX_GCC_FLAGS} -O3 -DNDEBUG -gdwarf-2")
 SET(CXX_FLAGS_ADDRESS_SANITIZER
   "${CXX_CLANG_FLAGS} -O1 -g -fsanitize=address -fno-omit-frame-pointer -DADDRESS_SANITIZER")
-
-# if no build build type is specified, default to debug builds
-if (NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Debug)
-endif(NOT CMAKE_BUILD_TYPE)
-
-STRING (TOUPPER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE)
 
 # Set compile flags based on the build type.
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "DEBUG")
   SET(CMAKE_CXX_FLAGS ${CXX_FLAGS_DEBUG})
 elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "RELEASE")
   SET(CMAKE_CXX_FLAGS ${CXX_FLAGS_RELEASE})
-elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "CODE_COVERAGE_DEBUG")
-  SET(CMAKE_CXX_FLAGS "${CXX_FLAGS_DEBUG} ${CXX_COVERAGE_FLAGS}")
-elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "CODE_COVERAGE_RELEASE")
-  SET(CMAKE_CXX_FLAGS "${CXX_FLAGS_RELEASE} ${CXX_COVERAGE_FLAGS}")
 elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "ADDRESS_SANITIZER")
   if (NOT IMPALA_TOOLCHAIN)
     SET(CMAKE_CXX_COMPILER ${LLVM_CLANG_EXECUTABLE})
@@ -94,7 +93,11 @@ elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "ADDRESS_SANITIZER")
   SET(CMAKE_CXX_FLAGS "${CXX_FLAGS_ADDRESS_SANITIZER}")
 else()
   message(FATAL_ERROR "Unknown build type: ${CMAKE_BUILD_TYPE}")
-endif ()
+endif()
+
+if (ENABLE_CODE_COVERAGE)
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CXX_COVERAGE_FLAGS}")
+endif()
 
 # Add flags that are common across build types
 #  - fverboase-asm creates better annotated assembly.  This doesn't seem to affect
@@ -125,11 +128,25 @@ add_definitions(-DHAVE_INTTYPES_H -DHAVE_NETINET_IN_H -DHAVE_NETDB_H)
 
 # Set clang flags for cross-compiling to IR.
 # IR_COMPILE is #defined for the cross compile to remove code that bloats the IR.
-# Note that we don't enable any optimization. We want unoptimized IR since we will be
-# modifying it at runtime, then re-compiling (and optimizing) the modified code. The final
-# optimizations will be less effective if the initial code is also optimized.
+# We enable basic optimizations (-O1) to reduce the IR size and speed up runtime JIT.
+# Empirically, the runtime JIT produces slightly better code when starting with IR that
+# was optimized at -O1. Higher optimization levels tend to bloat the code.
+#  -Wno-deprecated: gutil contains deprecated headers
+#  -Wno-c++11-extensions: c++11 extensions are ok as long as clang supports them
+#  -Wno-return-type-c-linkage: UDFs return C++ classes but use C linkage to prevent
+#       mangling
 set(CLANG_IR_CXX_FLAGS "-emit-llvm" "-faltivec" "-c" "-DIR_COMPILE" "-DNDEBUG"
-  "-DHAVE_INTTYPES_H" "-DHAVE_NETINET_IN_H" "-DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG")
+  "-DHAVE_INTTYPES_H" "-DHAVE_NETINET_IN_H" "-DBOOST_DATE_TIME_POSIX_TIME_STD_CONFIG"
+  "-Wno-deprecated" "-Wno-c++11-extensions" "-Wno-return-type-c-linkage" "-O1")
+if (IMPALA_TOOLCHAIN)
+  # -Werror: compile warnings should be errors when using the toolchain compiler.
+  SET(CLANG_IR_CXX_FLAGS "${CLANG_IR_CXX_FLAGS}" "-Werror")
+endif()
+
+# Flags to pass to LLVM's opt to further optimize cross-compiled IR.
+#  -inline: inline with low threshold to get rid of trivial accessor functions.
+set(LLVM_OPT_IR_FLAGS "-inline" "-inlinehint-threshold=10" "-inline-threshold=10")
+
 
 # setup doc generation with Doxygen
 find_package(Doxygen)
@@ -214,12 +231,19 @@ add_definitions(-fPIC)
 
 # set compile output directory
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "DEBUG" OR
-    "${CMAKE_BUILD_TYPE}" STREQUAL "CODE_COVERAGE_DEBUG" OR
     "${CMAKE_BUILD_TYPE}" STREQUAL "ADDRESS_SANITIZER")
   set(BUILD_OUTPUT_ROOT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build/debug/")
 else()
   set(BUILD_OUTPUT_ROOT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build/release/")
 endif()
+
+# Create a latest link so that scripts can pick up the correct build automatically
+FILE(MAKE_DIRECTORY ${BUILD_OUTPUT_ROOT_DIRECTORY})
+if (NOT APPLE)
+  set(MORE_ARGS "-T")
+endif()
+EXECUTE_PROCESS(COMMAND ln ${MORE_ARGS} -sf ${BUILD_OUTPUT_ROOT_DIRECTORY}
+  ${CMAKE_CURRENT_SOURCE_DIR}/build/latest)
 
 # This is a list of impala library dependencies. Individual libraries
 # must not specify library dependencies in their own CMakeLists.txt file.
@@ -305,11 +329,9 @@ set (IMPALA_LINK_LIBS ${IMPALA_LINK_LIBS}
   ${JAVA_JVM_LIBRARY}
   -lrt
 )
-
-
-if ("${CMAKE_BUILD_TYPE}" STREQUAL "CODE_COVERAGE")
-  set (IMPALA_LINK_LIBS ${IMPALA_LINK_LIBS} -lgcov)
-endif ()
+if($ENV{KUDU_IS_SUPPORTED} STREQUAL true)
+  list(APPEND IMPALA_LINK_LIBS kudu_client)
+endif()
 
 # The above link list does not include tcmalloc. This is because the Impala JVM support
 # libraries (libfesupport, libloggingsupport) cannot use tcmalloc in all cases. When they
@@ -337,14 +359,11 @@ if (NOT IMPALA_TOOLCHAIN AND NOT BUILD_SHARED_LIBS)
     ${IMPALA_LINK_LIBS_DYNAMIC_TARGETS} ${ZLIB_LIBRARIES} ${BZIP2_LIBRARIES})
 endif()
 
-# Replace Udf with ImpalaUdf for $UDF_TEST_LINK_LIBS
-set (UDF_TEST_LINK_LIBS ${IMPALA_LINK_LIBS} ImpalaUdf)
-list(REMOVE_ITEM UDF_TEST_LINK_LIBS Udf)
-
 # Link libs for test executables.  Although not all tests need all libs,
 # the build time for the tests is rather small and not worth the trouble.
+# TODO: build time for tests is no longer small, but our dependencies are now very
+# complicated and hard to isolate
 set (IMPALA_TEST_LINK_LIBS ${IMPALA_LINK_LIBS} gtest)
-set (UDF_TEST_LINK_LIBS ${UDF_TEST_LINK_LIBS} gtest)
 
 MESSAGE(STATUS "Compiler Flags: ${CMAKE_CXX_FLAGS}")
 
@@ -364,6 +383,21 @@ FUNCTION(ADD_BE_TEST TEST_NAME)
   get_filename_component(DIR_NAME ${CMAKE_CURRENT_SOURCE_DIR} NAME)
   ADD_EXECUTABLE(${TEST_NAME} ${TEST_NAME}.cc)
   TARGET_LINK_LIBRARIES(${TEST_NAME} ${IMPALA_TEST_LINK_LIBS})
+  set(CMAKE_EXE_LINKER_FLAGS "--start-group")
+  ADD_TEST(${TEST_NAME} "${BUILD_OUTPUT_ROOT_DIRECTORY}/${DIR_NAME}/${TEST_NAME}")
+  ADD_DEPENDENCIES(be-test ${TEST_NAME})
+ENDFUNCTION()
+
+# Similar utility function for tests that use the UDF SDK
+FUNCTION(ADD_UDF_TEST TEST_NAME)
+  # This gets the directory where the test is from (e.g. 'exprs' or 'runtime')
+  get_filename_component(DIR_NAME ${CMAKE_CURRENT_SOURCE_DIR} NAME)
+  ADD_EXECUTABLE(${TEST_NAME} ${TEST_NAME}.cc)
+  # Set ImpalaUdf as the first link library for UDF tests. This will cause its test
+  # definitions to be linked instead of subsequent non-test definitions. Otherwise the
+  # test definitions of MemTracker, etc. will be used in the udf.cc compilation unit, but
+  # the Runtime method implementations will be linked. See IMPALA-3132.
+  TARGET_LINK_LIBRARIES(${TEST_NAME} ImpalaUdf ${IMPALA_TEST_LINK_LIBS})
   set(CMAKE_EXE_LINKER_FLAGS "--start-group")
   ADD_TEST(${TEST_NAME} "${BUILD_OUTPUT_ROOT_DIRECTORY}/${DIR_NAME}/${TEST_NAME}")
   ADD_DEPENDENCIES(be-test ${TEST_NAME})

@@ -39,6 +39,7 @@ add_library(Exprs
   expr-ir.cc
   hive-udf-call.cc
   in-predicate-ir.cc
+  is-not-empty-predicate.cc
   is-null-predicate.cc
   like-predicate.cc
   literal.cc
@@ -66,8 +67,6 @@ ADD_BE_TEST(expr-codegen-test)
 COMPILE_TO_IR(expr-codegen-test.cc)
 add_dependencies(expr-codegen-test-ir thrift-deps)
 
-ADD_EXECUTABLE(aggregate-functions-test aggregate-functions-test.cc)
-TARGET_LINK_LIBRARIES(aggregate-functions-test ${UDF_TEST_LINK_LIBS})
-ADD_TEST(uda-test "${EXECUTABLE_OUTPUT_PATH}/aggregate-functions-test")
+ADD_UDF_TEST(aggregate-functions-test)
 
 ADD_BE_BENCHMARK(in-predicate-benchmark)

@@ -21,6 +21,7 @@
 #include <boost/accumulators/statistics/stats.hpp>
 #include <boost/accumulators/statistics/variance.hpp>
 
+#include "common/init.h"
 #include "common/logging.h"
 #include "exprs/aggregate-functions.h"
 #include "runtime/multi-precision.h"
@@ -123,7 +124,7 @@ TEST(HistogramTest, TestDecimal) {
   // All input values are x, result should be constant.
   {
     vector<DecimalVal> input;
-    int128_t val = DecimalUtil::MAX_UNSCALED_DECIMAL;
+    int128_t val = DecimalUtil::MAX_UNSCALED_DECIMAL16;
     stringstream ss;
     for (int i = 0; i < INPUT_SIZE; ++i) input.push_back(DecimalVal(val));
     for (int i = 0; i < NUM_BUCKETS; ++i) {
@@ -163,8 +164,7 @@ TEST(HistogramTest, TestString) {
 }
 
 int main(int argc, char** argv) {
-  impala::InitGoogleLoggingSafe(argv[0]);
-  impala::DecimalUtil::InitMaxUnscaledDecimal();
   ::testing::InitGoogleTest(&argc, argv);
+  InitCommonRuntime(argc, argv, false, TestInfo::BE_TEST);
   return RUN_ALL_TESTS();
 }

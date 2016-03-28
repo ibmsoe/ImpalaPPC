@@ -17,12 +17,14 @@
 import logging
 import pytest
 import os
-from subprocess import call
+from subprocess import check_call
 from tests.common.test_vector import *
 from tests.common.test_dimensions import *
 from tests.common.impala_test_suite import ImpalaTestSuite
 from tests.common.impala_cluster import ImpalaCluster
+from tests.common.skip import SkipIfIsilon
 from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
+from tests.util.filesystem_utils import IS_ISILON, IS_LOCAL
 
 class TestHiveMetaStoreFailure(ImpalaTestSuite):
   @classmethod
@@ -44,8 +46,18 @@ class TestHiveMetaStoreFailure(ImpalaTestSuite):
     super(TestHiveMetaStoreFailure, cls).setup_class()
 
   @classmethod
+  def run_hive_server(cls):
+    script = os.path.join(os.environ['IMPALA_HOME'], 'testdata/bin/run-hive-server.sh')
+    run_cmd = [script]
+    if IS_LOCAL or IS_ISILON:
+      run_cmd.append('-only_metastore')
+    check_call(run_cmd, close_fds=True)
+
+  @classmethod
   def teardown_class(cls):
-    call([os.path.join(os.environ['IMPALA_HOME'], 'testdata/bin/run-hive-server.sh')])
+    # Make sure the metastore is running even if the test aborts somewhere unexpected
+    # before restarting the metastore itself.
+    cls.run_hive_server()
     cls.client.execute("invalidate metadata")
     super(TestHiveMetaStoreFailure, cls).teardown_class()
 
@@ -56,7 +68,8 @@ class TestHiveMetaStoreFailure(ImpalaTestSuite):
     # Force all the tables to be reloaded and then kill the hive metastore.
     tbl_name = "functional.alltypes"
     self.client.execute("invalidate metadata")
-    call([os.path.join(os.environ['IMPALA_HOME'], 'testdata/bin/kill-hive-server.sh')])
+    kill_cmd = os.path.join(os.environ['IMPALA_HOME'], 'testdata/bin/kill-hive-server.sh')
+    check_call([kill_cmd], close_fds=True)
 
     try:
       self.client.execute("describe %s" % tbl_name)
@@ -68,8 +81,7 @@ class TestHiveMetaStoreFailure(ImpalaTestSuite):
       print str(e)
       assert "Failed to load metadata for table: %s. Running 'invalidate metadata %s' "\
           "may resolve this problem." % (tbl_name, tbl_name) in str(e)
-
-    call([os.path.join(os.environ['IMPALA_HOME'], 'testdata/bin/run-hive-server.sh')])
+    self.run_hive_server()
 
     self.client.execute("invalidate metadata %s" % tbl_name)
     self.client.execute("describe %s" % tbl_name)

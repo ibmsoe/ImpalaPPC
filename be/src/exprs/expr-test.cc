@@ -18,14 +18,14 @@
 #include <string>
 #include <time.h>
 
-#include <boost/assign/list_of.hpp>
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/random/mersenne_twister.hpp>
+#include <boost/regex.hpp>
 #include <boost/unordered_map.hpp>
-#include <gtest/gtest.h>
 
+#include "testutil/gtest-util.h"
 #include "codegen/llvm-codegen.h"
 #include "common/init.h"
 #include "common/object-pool.h"
@@ -38,7 +38,7 @@
 #include "gen-cpp/hive_metastore_types.h"
 #include "rpc/thrift-client.h"
 #include "rpc/thrift-server.h"
-#include "runtime/raw-value.h"
+#include "runtime/raw-value.inline.h"
 #include "runtime/string-value.h"
 #include "runtime/timestamp-value.h"
 #include "service/fe-support.h"
@@ -56,7 +56,6 @@ DECLARE_bool(disable_optimization_passes);
 DECLARE_bool(use_utc_for_unix_timestamp_conversions);
 
 namespace posix_time = boost::posix_time;
-using boost::assign::list_of;
 using boost::bad_lexical_cast;
 using boost::date_time::c_local_adjustor;
 using boost::posix_time::from_time_t;
@@ -284,10 +283,10 @@ class ExprTest : public testing::Test {
                 &value[0], value.size(), type, &result);
             return &expr_value_.decimal16_val;
           default:
-            DCHECK(false) << type;
+            EXPECT_TRUE(false) << type;
         }
       default:
-        DCHECK(false) << type;
+        EXPECT_TRUE(false) << type;
     }
     return NULL;
   }
@@ -305,6 +304,16 @@ class ExprTest : public testing::Test {
     GetValue(expr, type, reinterpret_cast<void**>(&result));
     string tmp(result->ptr, result->len);
     EXPECT_EQ(expected_result, tmp) << expr;
+  }
+
+  string TestStringValueRegex(const string& expr, const string& regex) {
+    StringValue* result;
+    GetValue(expr, TYPE_STRING, reinterpret_cast<void **>(&result));
+    static const boost::regex e(regex);
+    string result_cxxstr(result->ptr, result->len);
+    const bool is_regex_match = regex_match(result_cxxstr, e);
+    EXPECT_TRUE(is_regex_match);
+    return result_cxxstr;
   }
 
   // We can't put this into TestValue() because GTest can't resolve
@@ -539,7 +548,31 @@ class ExprTest : public testing::Test {
     TestValue("1.23 < 1.234", TYPE_BOOLEAN, true);
     TestValue("1.23 > 1.234", TYPE_BOOLEAN, false);
     TestValue("1.23 = 1.230000000000000000000", TYPE_BOOLEAN, true);
-    TestValue("1.2300 != 1.230000000000000000001", TYPE_BOOLEAN, true);
+
+    // Some values are too precise to be stored to full precision as doubles, but not too
+    // precise to be stored as decimals.
+    static const string not_too_precise = "1.25";
+    // The closest double to 'too_precise' is 1.25 - the string as written cannot be
+    // preresented exactly as a double.
+    static const string too_precise = "1.250000000000000000001";
+    TestValue(
+        "cast(" + not_too_precise + " as double) != cast(" + too_precise + " as double)",
+        TYPE_BOOLEAN, false);
+    TestValue(not_too_precise + " != " + too_precise, TYPE_BOOLEAN, true);
+    TestValue("cast(" + not_too_precise + " as double) IS DISTINCT FROM cast(" +
+            too_precise + " as double)",
+        TYPE_BOOLEAN, false);
+    TestValue(not_too_precise + " IS DISTINCT FROM " + too_precise, TYPE_BOOLEAN, true);
+    TestValue("cast(" + not_too_precise + " as double) IS NOT DISTINCT FROM cast(" +
+            too_precise + " as double)",
+        TYPE_BOOLEAN, true);
+    TestValue(
+        not_too_precise + " IS NOT DISTINCT FROM " + too_precise, TYPE_BOOLEAN, false);
+    TestValue(
+        "cast(" + not_too_precise + " as double) <=> cast(" + too_precise + " as double)",
+        TYPE_BOOLEAN, true);
+    TestValue(not_too_precise + " <=> " + too_precise, TYPE_BOOLEAN, false);
+
     TestValue("cast(1 as decimal(38,0)) = cast(1 as decimal(38,37))", TYPE_BOOLEAN, true);
     TestValue("cast(1 as decimal(38,0)) = cast(0.1 as decimal(38,38))",
               TYPE_BOOLEAN, false);
@@ -568,6 +601,47 @@ class ExprTest : public testing::Test {
     TestIsNull("NULL > " + op, TYPE_BOOLEAN);
     TestIsNull("NULL <= " + op, TYPE_BOOLEAN);
     TestIsNull("NULL >= " + op, TYPE_BOOLEAN);
+  }
+
+  // Test IS DISTINCT FROM operator and its variants
+  void TestDistinctFrom() {
+    static const string operators[] = {"<=>", "IS DISTINCT FROM", "IS NOT DISTINCT FROM"};
+    static const string types[] = {"Boolean", "TinyInt", "SmallInt", "Int", "BigInt",
+        "Float", "Double", "String", "Timestamp", "Decimal"};
+    static const string operands1[] = {
+        "true", "cast(1 as TinyInt)", "cast(1 as SmallInt)", "cast(1 as Int)",
+        "cast(1 as BigInt)", "cast(1 as Float)", "cast(1 as Double)",
+        "'this is a string'", "cast(1 as TimeStamp)", "cast(1 as Decimal)"
+    };
+    static const string operands2[] = {
+        "false", "cast(2 as TinyInt)", "cast(2 as SmallInt)", "cast(2 as Int)",
+        "cast(2 as BigInt)", "cast(2 as Float)", "cast(2 as Double)",
+        "'this is ALSO a string'", "cast(2 as TimeStamp)", "cast(2 as Decimal)"
+    };
+    for (int i = 0; i < sizeof(operators) / sizeof(string); ++i) {
+      // "IS DISTINCT FROM" and "<=>" are generalized equality, and
+      // this fact is recorded in is_equal.
+      const bool is_equal = operators[i] != "IS DISTINCT FROM";
+      // Everything IS NOT DISTINCT FROM itself.
+      for (int j = 0; j < sizeof(types) / sizeof(string); ++j) {
+        const string operand = "cast(NULL as " + types[j] + ")";
+        TestValue(operand + ' ' + operators[i] + ' ' + operand, TYPE_BOOLEAN, is_equal);
+      }
+      for (int j = 0; j < sizeof(operands1) / sizeof(string); ++j) {
+        TestValue(operands1[j] + ' ' + operators[i] + ' ' + operands1[j], TYPE_BOOLEAN,
+                  is_equal);
+      }
+      // NULL IS DISTINCT FROM all non-null things.
+      for (int j = 0; j < sizeof(operands1) / sizeof(string); ++j) {
+        TestValue("NULL " + operators[i] + ' ' + operands1[j], TYPE_BOOLEAN, !is_equal);
+        TestValue(operands1[j] + ' ' + operators[i] + " NULL", TYPE_BOOLEAN, !is_equal);
+      }
+      // Non-null values can be DISTINCT.
+      for (int j = 0; j < sizeof(operands1) / sizeof(string); ++j) {
+        TestValue(operands1[j] + ' ' + operators[i] + ' ' + operands2[j], TYPE_BOOLEAN,
+                  !is_equal);
+      }
+    }
   }
 
   // Test comparison operators with a left or right NULL operand on all types.
@@ -875,9 +949,8 @@ template <typename T> void TestSingleLiteralConstruction(
 
   Expr* expr = pool.Add(new Literal(type, value));
   ExprContext ctx(expr);
-  ctx.Prepare(&state, desc, &tracker);
-  Status status = ctx.Open(&state);
-  EXPECT_TRUE(status.ok());
+  EXPECT_OK(ctx.Prepare(&state, desc, &tracker));
+  EXPECT_OK(ctx.Open(&state));
   EXPECT_EQ(0, RawValue::Compare(ctx.GetValue(NULL), &value, type))
       << "type: " << type << ", value: " << value;
   ctx.Close(&state);
@@ -889,10 +962,8 @@ TEST_F(ExprTest, NullLiteral) {
     ExprContext ctx(&expr);
     RuntimeState state(TExecPlanFragmentParams(), "", NULL);
     MemTracker tracker;
-    Status status = ctx.Prepare(&state, RowDescriptor(), &tracker);
-    EXPECT_TRUE(status.ok());
-    status = ctx.Open(&state);
-    EXPECT_TRUE(status.ok());
+    EXPECT_OK(ctx.Prepare(&state, RowDescriptor(), &tracker));
+    EXPECT_OK(ctx.Open(&state));
     EXPECT_TRUE(ctx.GetValue(NULL) == NULL);
     ctx.Close(&state);
   }
@@ -1183,6 +1254,7 @@ TEST_F(ExprTest, BinaryPredicates) {
   TestStringComparisons();
   TestDecimalComparisons();
   TestNullComparisons();
+  TestDistinctFrom();
 }
 
 // Test casting from all types to all other types
@@ -1483,6 +1555,35 @@ TEST_F(ExprTest, LikePredicate) {
   TestValue("'abc\n123' LIKE 'abc%'", TYPE_BOOLEAN, true);
   TestValue("'123\nabc' LIKE '%abc'", TYPE_BOOLEAN, true);
   TestValue("'123\nabc\n123' LIKE '%abc%'", TYPE_BOOLEAN, true);
+  // Test case-insensitivity.
+  TestValue("'aBcde' ILIKE '%%bC%%'", TYPE_BOOLEAN, true);
+  TestValue("'aBcde' ILIKE '%%Cb%%'", TYPE_BOOLEAN, false);
+  TestValue("'aBcde' ILIKE 'abC%%'", TYPE_BOOLEAN, true);
+  TestValue("'aBcde' ILIKE 'cbA%%'", TYPE_BOOLEAN, false);
+  TestValue("'aBcde' ILIKE '%%bCde'", TYPE_BOOLEAN, true);
+  TestValue("'aBcde' ILIKE '%%cBde'", TYPE_BOOLEAN, false);
+  TestValue("'aBcde' ILIKE '%%abCde%%'", TYPE_BOOLEAN, true);
+  TestValue("'aBcde' ILIKE '%%eDcba%%'", TYPE_BOOLEAN, false);
+  TestValue("'aBcde' ILIKE 'A%%Cd%%'", TYPE_BOOLEAN, true);
+  TestValue("'aBcde' ILIKE 'A%%Dc%%'", TYPE_BOOLEAN, false);
+  TestValue("'aBcde' ILIKE 'AbCde'", TYPE_BOOLEAN, true);
+  TestValue("'aBcde' ILIKE 'AbDCe'", TYPE_BOOLEAN, false);
+  TestValue("'Abc\n123' ILIKE 'aBc%123'", TYPE_BOOLEAN, true);
+  TestValue("'Abc\n\n123' ILIKE 'aBc%123'", TYPE_BOOLEAN, true);
+  TestValue("'\nAbc\n123' ILIKE '%aBc_123'", TYPE_BOOLEAN, true);
+  TestValue("'Abc\n123\nedf' ILIKE 'aBc%edf'", TYPE_BOOLEAN, true);
+  TestValue("'.[]{}()x\\\\*+?|^$' ILIKE '.[]{}()_\\\\\\\\*+?|^$'", TYPE_BOOLEAN, true);
+  TestValue("'.[]{}()xA\\\\*+?|^$' ILIKE '.[]{}()_a\\\\\\\\*+?|^$'", TYPE_BOOLEAN, true);
+  TestValue("'abxcY1234a' IREGEXP 'a.X.y.*a'", TYPE_BOOLEAN, true);
+  TestValue("'a.x.Y.*a' IREGEXP 'a\\\\.X\\\\.y\\\\.\\\\*a'", TYPE_BOOLEAN, true);
+  TestValue("'abxcY1234a' IREGEXP '\\a\\.X\\\\.y\\\\.\\\\*a'", TYPE_BOOLEAN, false);
+  TestValue("'Abxcy1234a' IREGEXP 'a.x.y.*a'", TYPE_BOOLEAN, true);
+  TestValue("'English' IREGEXP 'en'", TYPE_BOOLEAN, true);
+  TestValue("'engLish' IREGEXP 'lIs'", TYPE_BOOLEAN, true);
+  TestValue("'English' IREGEXP 'englIsh'", TYPE_BOOLEAN, true);
+  TestValue("'eNglish' IREGEXP '^enGlish$'", TYPE_BOOLEAN, true);
+  TestValue("'enGlish' IREGEXP '^eNg'", TYPE_BOOLEAN, true);
+  TestValue("'engLish' IREGEXP 'lIsh$'", TYPE_BOOLEAN, true);
 }
 
 TEST_F(ExprTest, BetweenPredicate) {
@@ -2649,6 +2750,8 @@ TEST_F(ExprTest, MathConversionFunctions) {
     TestStringValue("conv(" + q + "11" + q + ", 36, 2)", "100101");
     TestStringValue("conv(" + q + "100101" + q + ", 2, 36)", "11");
     TestStringValue("conv(" + q + "0" + q + ", 10, 2)", "0");
+    // Test for very large big int
+    TestStringValue("conv(" + q + "2061013007" + q + ", 16, 10)", "139066421255");
     // Test negative numbers (tests from Hive).
     // If to_base is positive, the number should be handled as a 2's complement (64-bit).
     TestStringValue("conv(" + q + "-641" + q + ", 10, -10)", "-641");
@@ -3452,6 +3555,10 @@ TEST_F(ExprTest, TimestampFunctions) {
   TestValue("hour(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 9);
   TestValue("minute(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 10);
   TestValue("second(cast('2011-12-22 09:10:11.000000' as timestamp))", TYPE_INT, 11);
+  TestValue("millisecond(cast('2011-12-22 09:10:11.123456' as timestamp))",
+      TYPE_INT, 123);
+  TestValue("millisecond(cast('2011-12-22 09:10:11' as timestamp))", TYPE_INT, 0);
+  TestValue("millisecond(cast('2011-12-22' as timestamp))", TYPE_INT, 0);
   TestValue("year(cast('2011-12-22' as timestamp))", TYPE_INT, 2011);
   TestValue("month(cast('2011-12-22' as timestamp))", TYPE_INT, 12);
   TestValue("dayofmonth(cast('2011-12-22' as timestamp))", TYPE_INT, 22);
@@ -3464,6 +3571,7 @@ TEST_F(ExprTest, TimestampFunctions) {
   TestValue("hour(cast('09:10:11.000000' as timestamp))", TYPE_INT, 9);
   TestValue("minute(cast('09:10:11.000000' as timestamp))", TYPE_INT, 10);
   TestValue("second(cast('09:10:11.000000' as timestamp))", TYPE_INT, 11);
+  TestValue("millisecond(cast('09:10:11.123456' as timestamp))", TYPE_INT, 123);
   TestStringValue(
       "to_date(cast('2011-12-22 09:10:11.12345678' as timestamp))", "2011-12-22");
 
@@ -3535,6 +3643,7 @@ TEST_F(ExprTest, TimestampFunctions) {
       TYPE_INT);
   TestIsNull("datediff(cast('2012-12-22' as timestamp), NULL)", TYPE_INT);
   TestIsNull("datediff(NULL, NULL)", TYPE_INT);
+  TestIsNull("millisecond(NULL)", TYPE_INT);
 
   TestStringValue("dayname(cast('2011-12-18 09:10:11.000000' as timestamp))", "Sunday");
   TestStringValue("dayname(cast('2011-12-19 09:10:11.000000' as timestamp))", "Monday");
@@ -4145,6 +4254,13 @@ TEST_F(ExprTest, TimestampFunctions) {
   TestError("from_timestamp(cast('2012-02-28 11:10:11+0530' as timestamp), 'yyyy-MM-dd HH:mm:ss+hhdd')");
   TestError("from_timestamp(cast('2012-02-28+0530' as timestamp), 'yyyy-MM-dd+hhmm')");
   TestError("from_timestamp(cast('10:00:00+0530 2010-01-01' as timestamp), 'HH:mm:ss+hhmm yyyy-MM-dd')");
+
+  // Regression test for IMPALA-2732, can't parse custom date formats with non-zero-padded
+  // values
+  TestValue("unix_timestamp('12/2/2015', 'MM/d/yyyy')", TYPE_BIGINT, 1449014400);
+  TestIsNull("unix_timestamp('12/2/2015', 'MM/dd/yyyy')", TYPE_BIGINT);
+  TestValue("unix_timestamp('12/31/2015', 'MM/d/yyyy')", TYPE_BIGINT, 1451520000);
+  TestValue("unix_timestamp('12/31/2015', 'MM/dd/yyyy')", TYPE_BIGINT, 1451520000);
 }
 
 TEST_F(ExprTest, ConditionalFunctions) {
@@ -4584,7 +4700,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
     exprs.clear();
     expected_offsets.clear();
     // With one expr, all offsets should be 0.
-    expected_offsets[t.GetByteSize()] = list_of(0).convert_to_container<std::set<int> >();
+    expected_offsets[t.GetByteSize()] = set<int>({0});
     exprs.push_back(pool.Add(Literal::CreateLiteral(t, "0")));
     if (t.IsVarLenStringType()) {
       ValidateLayout(exprs, 16, 0, expected_offsets);
@@ -4615,7 +4731,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
   exprs.push_back(pool.Add(Literal::CreateLiteral(ColumnType::CreateCharType(3), "0")));
   expected_offsets[3].insert(expected_byte_size);
   expected_byte_size += 3 + 3; // 3 byte of padding
-  DCHECK_EQ(expected_byte_size % 4, 0);
+  ASSERT_EQ(expected_byte_size % 4, 0);
 
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_INT, "0")));
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_FLOAT, "0")));
@@ -4627,7 +4743,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
   expected_offsets[4].insert(expected_byte_size + 8);
   expected_offsets[4].insert(expected_byte_size + 12);
   expected_byte_size += 4 * 4 + 4;  // 4 bytes of padding
-  DCHECK_EQ(expected_byte_size % 8, 0);
+  ASSERT_EQ(expected_byte_size % 8, 0);
 
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_BIGINT, "0")));
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_BIGINT, "0")));
@@ -4641,7 +4757,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
   expected_offsets[8].insert(expected_byte_size + 24);
   expected_offsets[8].insert(expected_byte_size + 32);
   expected_byte_size += 5 * 8;      // No more padding
-  DCHECK_EQ(expected_byte_size % 8, 0);
+  ASSERT_EQ(expected_byte_size % 8, 0);
 
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_TIMESTAMP, "0")));
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_TIMESTAMP, "0")));
@@ -4651,7 +4767,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
   expected_offsets[16].insert(expected_byte_size + 16);
   expected_offsets[16].insert(expected_byte_size + 32);
   expected_byte_size += 3 * 16;
-  DCHECK_EQ(expected_byte_size % 8, 0);
+  ASSERT_EQ(expected_byte_size % 8, 0);
 
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_STRING, "0")));
   exprs.push_back(pool.Add(Literal::CreateLiteral(TYPE_STRING, "0")));
@@ -4662,7 +4778,7 @@ TEST_F(ExprTest, ResultsLayoutTest) {
   expected_offsets[0].insert(expected_byte_size + 32);
   expected_var_begin = expected_byte_size;
   expected_byte_size += 3 * 16;
-  DCHECK_EQ(expected_byte_size % 8, 0);
+  ASSERT_EQ(expected_byte_size % 8, 0);
 
   // Validate computed layout
   ValidateLayout(exprs, expected_byte_size, expected_var_begin, expected_offsets);
@@ -5618,7 +5734,18 @@ TEST_F(ExprTest, BitByteBuiltins) {
   TestValue("shiftright(cast(1 as BIGINT), -2)", TYPE_BIGINT, 4);
   TestValue("rotateleft(4, -3)", TYPE_TINYINT, -128);
   TestValue("rotateright(256, -2)", TYPE_SMALLINT, 1024);
+}
 
+TEST_F(ExprTest, UuidTest) {
+  boost::unordered_set<string> string_set;
+  const unsigned int NUM_UUIDS = 10;
+  const string regex(
+      "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}");
+  for (int i = 0; i < NUM_UUIDS; ++i) {
+    const string uuid_str = TestStringValueRegex("uuid()", regex);
+    string_set.insert(uuid_str);
+  }
+  EXPECT_TRUE(string_set.size() == NUM_UUIDS);
 }
 
 } // namespace impala

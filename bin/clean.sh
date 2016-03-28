@@ -18,7 +18,7 @@
 # branch to a non-toolchain branch due to caching in CMake generated files.
 
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
 # If the project was never build, no Makefile will exist and thus make clean will fail.
 # Combine the make command with the bash noop to always return true.
@@ -32,7 +32,7 @@ fi
 # clean the external data source project
 pushd ${IMPALA_HOME}/ext-data-source
 rm -rf api/generated-sources/*
-mvn clean
+${IMPALA_HOME}/bin/mvn-quiet.sh clean
 popd
 
 # clean fe
@@ -47,13 +47,13 @@ popd
 # clean be
 pushd $IMPALA_HOME/be
 # remove everything listed in .gitignore
-git clean -Xdf
+git clean -Xdfq
 popd
 
 # clean shell build artifacts
 pushd $IMPALA_HOME/shell
 # remove everything listed in .gitignore
-git clean -Xdf
+git clean -Xdfq
 popd
 
 # Clean stale .pyc, .pyo files and __pycache__ directories.
@@ -72,6 +72,10 @@ if [ -e $IMPALA_LZO ]; then
 fi
 
 # When switching to and from toolchain, make sure to remove all CMake generated files
-find -iname '*cmake*' -not -name CMakeLists.txt \
-    -not -path '*cmake_modules*' \
-    -not -path '*thirdparty*' | xargs rm -Rf
+FIND_ARGS=("$IMPALA_HOME" -iname '*cmake*' -not -name CMakeLists.txt \
+    -not -path "$IMPALA_HOME/cmake_modules*" \
+    -not -path "$IMPALA_HOME/thirdparty*")
+if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
+  FIND_ARGS+=(-not -path "$IMPALA_TOOLCHAIN/*")
+fi
+find "${FIND_ARGS[@]}" | xargs rm -Rf

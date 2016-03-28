@@ -31,11 +31,11 @@
 #include "runtime/hdfs-fs-cache.h"
 #include "runtime/runtime-state.h"
 #include "runtime/mem-pool.h"
-#include "runtime/raw-value.h"
 #include "runtime/row-batch.h"
 #include "runtime/string-value.h"
 #include "runtime/tuple-row.h"
 #include "runtime/tuple.h"
+#include "util/bitmap.h"
 #include "util/codec.h"
 #include "util/debug-util.h"
 #include "util/runtime-profile.h"
@@ -47,6 +47,7 @@
 
 using namespace impala;
 using namespace llvm;
+using namespace strings;
 
 const char* FieldLocation::LLVM_CLASS_NAME = "struct.impala::FieldLocation";
 const char* HdfsScanner::LLVM_CLASS_NAME = "class.impala::HdfsScanner";
@@ -90,10 +91,13 @@ Status HdfsScanner::Prepare(ScannerContext* context) {
          scanner_conjuncts_map_.end());
   scanner_conjunct_ctxs_ = &scanner_conjuncts_map_[scan_node_->tuple_desc()->id()];
 
+  // Initialize the template_tuple_.
   template_tuple_ = scan_node_->InitTemplateTuple(
       state_, context_->partition_descriptor()->partition_key_value_ctxs());
   template_tuple_map_[scan_node_->tuple_desc()] = template_tuple_;
-  StartNewRowBatch();
+
+  // Allocate a new row batch. May fail if mem limit is exceeded.
+  RETURN_IF_ERROR(StartNewRowBatch());
   decompress_timer_ = ADD_TIMER(scan_node_->runtime_profile(), "DecompressionTime");
   return Status::OK();
 }
@@ -104,6 +108,7 @@ void HdfsScanner::Close() {
   for (; iter != scanner_conjuncts_map_.end(); ++iter) {
     Expr::Close(iter->second, state_);
   }
+  obj_pool_.Clear();
 }
 
 Status HdfsScanner::InitializeWriteTuplesFn(HdfsPartitionDescriptor* partition,
@@ -127,11 +132,17 @@ Status HdfsScanner::InitializeWriteTuplesFn(HdfsPartitionDescriptor* partition,
   return Status::OK();
 }
 
-void HdfsScanner::StartNewRowBatch() {
+Status HdfsScanner::StartNewRowBatch() {
   batch_ = new RowBatch(scan_node_->row_desc(), state_->batch_size(),
       scan_node_->mem_tracker());
-  tuple_mem_ =
-      batch_->tuple_data_pool()->Allocate(state_->batch_size() * tuple_byte_size_);
+  int64_t size = state_->batch_size() * tuple_byte_size_;
+  tuple_mem_ = batch_->tuple_data_pool()->TryAllocate(size);
+  if (UNLIKELY(tuple_mem_ == NULL)) {
+    string details = Substitute("StartNewRowBatch() failed to allocate $0 bytes.", size);
+    return batch_->tuple_data_pool()->mem_tracker()->MemLimitExceeded(state_,
+        details, size);
+  }
+  return Status::OK();
 }
 
 int HdfsScanner::GetMemory(MemPool** pool, Tuple** tuple_mem, TupleRow** tuple_row_mem) {
@@ -143,21 +154,15 @@ int HdfsScanner::GetMemory(MemPool** pool, Tuple** tuple_mem, TupleRow** tuple_r
   return batch_->capacity() - batch_->num_rows();
 }
 
-int HdfsScanner::GetCollectionMemory(CollectionValueBuilder* builder, MemPool** pool,
-    Tuple** tuple_mem, TupleRow** tuple_row_mem) {
-  DCHECK(parse_status_.ok()) << "Don't overwrite parse_status_"
-      << parse_status_.GetDetail();
+Status HdfsScanner::GetCollectionMemory(CollectionValueBuilder* builder, MemPool** pool,
+    Tuple** tuple_mem, TupleRow** tuple_row_mem, int64_t* num_rows) {
+  int num_tuples;
   *pool = builder->pool();
-  int max_num_rows = builder->GetFreeMemory(tuple_mem);
-  if (max_num_rows == 0) {
-    parse_status_ = state_->SetMemLimitExceeded(ErrorMsg(
-        TErrorCode::COLLECTION_ALLOC_FAILED,
-        PrintPath(builder->tuple_desc().tuple_path())));
-    return 0;
-  }
+  RETURN_IF_ERROR(builder->GetFreeMemory(tuple_mem, &num_tuples));
   // Treat tuple as a single-tuple row
   *tuple_row_mem = reinterpret_cast<TupleRow*>(tuple_mem);
-  return max_num_rows;
+  *num_rows = num_tuples;
+  return Status::OK();
 }
 
 // TODO(skye): have this check scan_node_->ReachedLimit() and get rid of manual check?
@@ -170,13 +175,13 @@ Status HdfsScanner::CommitRows(int num_rows) {
   // We need to pass the row batch to the scan node if there is too much memory attached,
   // which can happen if the query is very selective. We need to release memory even
   // if no rows passed predicates.
-  if (batch_->AtCapacity(batch_->tuple_data_pool()) ||
-      context_->num_completed_io_buffers() > 0) {
+  if (batch_->AtCapacity() || context_->num_completed_io_buffers() > 0) {
     context_->ReleaseCompletedResources(batch_, /* done */ false);
     scan_node_->AddMaterializedRowBatch(batch_);
-    StartNewRowBatch();
+    RETURN_IF_ERROR(StartNewRowBatch());
   }
   if (context_->cancelled()) return Status::CANCELLED;
+  // TODO: Replace with GetQueryStatus().
   RETURN_IF_ERROR(state_->CheckQueryState());
   // Free local expr allocations for this thread
   HdfsScanNode::ConjunctsMap::const_iterator iter = scanner_conjuncts_map_.begin();
@@ -221,9 +226,7 @@ int HdfsScanner::WriteEmptyTuples(RowBatch* row_batch, int num_tuples) {
 
     for (int n = 0; n < num_tuples; ++n) {
       DCHECK(!row_batch->AtCapacity());
-      row_idx = row_batch->AddRow();
-      DCHECK(row_idx != RowBatch::INVALID_ROW_INDEX);
-      TupleRow* current_row = row_batch->GetRow(row_idx);
+      TupleRow* current_row = row_batch->GetRow(row_batch->AddRow());
       current_row->SetTuple(scan_node_->tuple_idx(), template_tuple_);
       row_batch->CommitLastRow();
     }
@@ -388,7 +391,7 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
   PointerType* hdfs_scanner_ptr_type = PointerType::get(hdfs_scanner_type, 0);
 
   // Generate the typed llvm struct for the output tuple
-  StructType* tuple_type = tuple_desc->GenerateLlvmStruct(codegen);
+  StructType* tuple_type = tuple_desc->GetLlvmStruct(codegen);
   if (tuple_type == NULL) return NULL;
   PointerType* tuple_ptr_type = PointerType::get(tuple_type, 0);
 
@@ -516,7 +519,7 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
       }
 
       Function* get_ctx_fn =
-          codegen->GetFunction(IRFunction::HDFS_SCANNER_GET_CONJUNCT_CTX);
+          codegen->GetFunction(IRFunction::HDFS_SCANNER_GET_CONJUNCT_CTX, false);
       Value* ctx = builder.CreateCall(
           get_ctx_fn, {this_arg, codegen->GetIntConstant(TYPE_INT, conjunct_idx)});
 
@@ -542,14 +545,12 @@ Function* HdfsScanner::CodegenWriteAlignedTuples(HdfsScanNode* node,
   DCHECK(write_complete_tuple_fn != NULL);
 
   Function* write_tuples_fn =
-      codegen->GetFunction(IRFunction::HDFS_SCANNER_WRITE_ALIGNED_TUPLES);
+      codegen->GetFunction(IRFunction::HDFS_SCANNER_WRITE_ALIGNED_TUPLES, true);
   DCHECK(write_tuples_fn != NULL);
 
-  int replaced = 0;
-  write_tuples_fn = codegen->ReplaceCallSites(write_tuples_fn, false,
-      write_complete_tuple_fn, "WriteCompleteTuple", &replaced);
-  DCHECK_EQ(replaced, 1) << "One call site should be replaced.";
-  DCHECK(write_tuples_fn != NULL);
+  int replaced = codegen->ReplaceCallSites(write_tuples_fn, write_complete_tuple_fn,
+      "WriteCompleteTuple");
+  DCHECK_EQ(replaced, 1);
 
   return codegen->FinalizeFunction(write_tuples_fn);
 }

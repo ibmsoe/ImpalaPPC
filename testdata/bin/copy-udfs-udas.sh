@@ -4,7 +4,7 @@
 # This script copies udf/uda binaries into hdfs.
 
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
 if [ x${JAVA_HOME} == x ]; then
   echo JAVA_HOME not set
@@ -35,7 +35,7 @@ then
   make -j$CORES \
       TestUdas TestUdfs test-udfs-ir udfsample udasample udf-sample-ir uda-sample-ir
   cd $IMPALA_HOME/tests/test-hive-udfs
-  mvn package
+  ${IMPALA_HOME}/bin/mvn-quiet.sh package
   popd
 fi
 
@@ -47,27 +47,27 @@ fi
 #   impala-hive-udfs.jar
 #   test-udfs.ll
 #   udf/uda samples (.so/.ll)
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/testutil/libTestUdas.so\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/testutil/libTestUdas.so\
     ${FILESYSTEM_PREFIX}/test-warehouse
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/testutil/libTestUdfs.so\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/testutil/libTestUdfs.so\
     ${FILESYSTEM_PREFIX}/test-warehouse
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/testutil/libTestUdfs.so\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/testutil/libTestUdfs.so\
     ${FILESYSTEM_PREFIX}/test-warehouse/libTestUdfs.SO
 hadoop fs -mkdir -p ${FILESYSTEM_PREFIX}/test-warehouse/udf_test
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/testutil/libTestUdfs.so\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/testutil/libTestUdfs.so\
     ${FILESYSTEM_PREFIX}/test-warehouse/udf_test/libTestUdfs.so
 hadoop fs -put -f ${HIVE_HOME}/lib/hive-exec-${IMPALA_HIVE_VERSION}.jar\
   ${FILESYSTEM_PREFIX}/test-warehouse/hive-exec.jar
 hadoop fs -put -f ${IMPALA_HOME}/tests/test-hive-udfs/target/test-hive-udfs-1.0.jar\
     ${FILESYSTEM_PREFIX}/test-warehouse/impala-hive-udfs.jar
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/testutil/test-udfs.ll\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/testutil/test-udfs.ll\
     ${FILESYSTEM_PREFIX}/test-warehouse
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/udf_samples/libudfsample.so\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/udf_samples/libudfsample.so\
     ${FILESYSTEM_PREFIX}/test-warehouse
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/udf_samples/udf-sample.ll\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/udf_samples/udf-sample.ll\
     ${FILESYSTEM_PREFIX}/test-warehouse
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/udf_samples/libudasample.so\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/udf_samples/libudasample.so\
     ${FILESYSTEM_PREFIX}/test-warehouse
-hadoop fs -put -f ${IMPALA_HOME}/be/build/debug/udf_samples/uda-sample.ll\
+hadoop fs -put -f ${IMPALA_HOME}/be/build/latest/udf_samples/uda-sample.ll\
     ${FILESYSTEM_PREFIX}/test-warehouse
 echo "Done copying udf/uda libraries."

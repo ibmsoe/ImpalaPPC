@@ -17,6 +17,7 @@ package com.cloudera.impala.planner;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
@@ -31,12 +32,14 @@ import com.cloudera.impala.analysis.AnalyticInfo;
 import com.cloudera.impala.analysis.Analyzer;
 import com.cloudera.impala.analysis.BaseTableRef;
 import com.cloudera.impala.analysis.BinaryPredicate;
+import com.cloudera.impala.analysis.BinaryPredicate.Operator;
 import com.cloudera.impala.analysis.CollectionTableRef;
 import com.cloudera.impala.analysis.Expr;
 import com.cloudera.impala.analysis.ExprId;
 import com.cloudera.impala.analysis.ExprSubstitutionMap;
 import com.cloudera.impala.analysis.InlineViewRef;
 import com.cloudera.impala.analysis.JoinOperator;
+import com.cloudera.impala.analysis.NullLiteral;
 import com.cloudera.impala.analysis.QueryStmt;
 import com.cloudera.impala.analysis.SelectStmt;
 import com.cloudera.impala.analysis.SingularRowSrcTableRef;
@@ -52,7 +55,10 @@ import com.cloudera.impala.analysis.UnionStmt.UnionOperand;
 import com.cloudera.impala.catalog.ColumnStats;
 import com.cloudera.impala.catalog.DataSourceTable;
 import com.cloudera.impala.catalog.HBaseTable;
+import com.cloudera.impala.catalog.HdfsPartition;
 import com.cloudera.impala.catalog.HdfsTable;
+import com.cloudera.impala.catalog.KuduTable;
+import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.common.ImpalaException;
 import com.cloudera.impala.common.InternalException;
@@ -611,7 +617,9 @@ public class SingleNodePlanner {
     // create a plan that feeds the aggregation of selectStmt with an empty set.
     // Make sure the slots of the aggregation exprs and the tuples that they reference
     // are materialized (see IMPALA-1960). Marks all collection-typed slots referenced
-    // in this select stmt as non-materialized because they are never unnested.
+    // in this select stmt as non-materialized because they are never unnested. Note that
+    // this creates extra unused space in the tuple since the mem layout has already been
+    // computed.
     if (analyzer.hasEmptySpjResultSet()) {
       unmarkCollectionSlots(selectStmt);
       PlanNode emptySetNode = new EmptySetNode(ctx_.getNextNodeId(), rowTuples);
@@ -620,6 +628,14 @@ public class SingleNodePlanner {
       return createAggregationPlan(selectStmt, analyzer, emptySetNode);
     }
 
+    AggregateInfo aggInfo = selectStmt.getAggInfo();
+    // For queries which contain partition columns only, we may use the metadata instead
+    // of table scans. This is only feasible if all materialized aggregate expressions
+    // have distinct semantics. Please see createHdfsScanPlan() for details.
+    boolean fastPartitionKeyScans =
+        analyzer.getQueryCtx().getRequest().query_options.optimize_partition_key_scans &&
+        aggInfo != null && aggInfo.hasAllDistinctAgg();
+
     // Separate table refs into parent refs (uncorrelated or absolute) and
     // subplan refs (correlated or relative), and generate their plan.
     boolean isStraightJoin = selectStmt.getSelectList().isStraightJoin();
@@ -627,13 +643,10 @@ public class SingleNodePlanner {
     List<SubplanRef> subplanRefs = Lists.newArrayList();
     computeParentAndSubplanRefs(
         selectStmt.getTableRefs(), isStraightJoin, parentRefs, subplanRefs);
-    PlanNode root = createTableRefsPlan(
-        parentRefs, subplanRefs, isStraightJoin, analyzer);
-
+    PlanNode root = createTableRefsPlan(parentRefs, subplanRefs, isStraightJoin,
+        fastPartitionKeyScans, analyzer);
     // add aggregation, if any
-    if (selectStmt.getAggInfo() != null) {
-      root = createAggregationPlan(selectStmt, analyzer, root);
-    }
+    if (aggInfo != null) root = createAggregationPlan(selectStmt, analyzer, root);
 
     // All the conjuncts_ should be assigned at this point.
     // TODO: Re-enable this check here and/or elswehere.
@@ -779,16 +792,20 @@ public class SingleNodePlanner {
 
   /**
    * Returns a plan tree for evaluating the given parentRefs and subplanRefs.
+   *
+   * 'fastPartitionKeyScans' indicates whether to try to produce slots with
+   * metadata instead of table scans.
    */
   private PlanNode createTableRefsPlan(List<TableRef> parentRefs,
-      List<SubplanRef> subplanRefs, boolean isStraightJoin, Analyzer analyzer)
-      throws ImpalaException {
+      List<SubplanRef> subplanRefs, boolean isStraightJoin,
+      boolean fastPartitionKeyScans, Analyzer analyzer) throws ImpalaException {
     // create plans for our table refs; use a list here instead of a map to
     // maintain a deterministic order of traversing the TableRefs during join
     // plan generation (helps with tests)
     List<Pair<TableRef, PlanNode>> parentRefPlans = Lists.newArrayList();
     for (TableRef ref: parentRefs) {
-      PlanNode root = createTableRefNode(ref, isStraightJoin, analyzer);
+      PlanNode root =
+          createTableRefNode(ref, isStraightJoin, fastPartitionKeyScans, analyzer);
       Preconditions.checkNotNull(root);
       root = createSubplan(root, subplanRefs, isStraightJoin, true, analyzer);
       parentRefPlans.add(new Pair<TableRef, PlanNode>(ref, root));
@@ -860,7 +877,7 @@ public class SingleNodePlanner {
     // whether we are in a subplan context or not (see computeParentAndSubplanRefs()).
     ctx_.pushSubplan(subplanNode);
     PlanNode subplan =
-        createTableRefsPlan(applicableRefs, subplanRefs, isStraightJoin, analyzer);
+        createTableRefsPlan(applicableRefs, subplanRefs, isStraightJoin, false, analyzer);
     ctx_.popSubplan();
     subplanNode.setSubplan(subplan);
     subplanNode.init(analyzer);
@@ -927,7 +944,7 @@ public class SingleNodePlanner {
     return root;
   }
 
-  /**
+ /**
   * Returns a UnionNode that materializes the exprs of the constant selectStmt.
   * Replaces the resultExprs of the selectStmt with SlotRefs into the materialized tuple.
   */
@@ -994,7 +1011,11 @@ public class SingleNodePlanner {
       Expr e = i.next();
       if (!(e instanceof BinaryPredicate)) continue;
       BinaryPredicate comp = (BinaryPredicate) e;
-      if (comp.getOp() == BinaryPredicate.Operator.NE) continue;
+      if ((comp.getOp() == BinaryPredicate.Operator.NE)
+          || (comp.getOp() == BinaryPredicate.Operator.DISTINCT_FROM)
+          || (comp.getOp() == BinaryPredicate.Operator.NOT_DISTINCT)) {
+        continue;
+      }
       Expr slotBinding = comp.getSlotBinding(d.getId());
       if (slotBinding == null || !slotBinding.isConstant() ||
           !slotBinding.getType().equals(Type.STRING)) {
@@ -1090,22 +1111,24 @@ public class SingleNodePlanner {
     // select references to its resultExprs from the enclosing scope(s)
     rootNode.setTblRefIds(Lists.newArrayList(inlineViewRef.getId()));
 
-    ExprSubstitutionMap inlineViewSmap = inlineViewRef.getSmap();
-    if (analyzer.isOuterJoined(inlineViewRef.getId())) {
-      // Exprs against non-matched rows of an outer join should always return NULL.
-      // Make the rhs exprs of the inline view's smap nullable, if necessary.
-      List<Expr> nullableRhs = TupleIsNullPredicate.wrapExprs(
-          inlineViewSmap.getRhs(), rootNode.getTupleIds(), analyzer);
-      inlineViewSmap = new ExprSubstitutionMap(inlineViewSmap.getLhs(), nullableRhs);
-    }
-    // Set output smap of rootNode *before* creating a SelectNode for proper resolution.
     // The output smap is the composition of the inline view's smap and the output smap
     // of the inline view's plan root. This ensures that all downstream exprs referencing
-    // the inline view are replaced with exprs referencing the physical output of
-    // the inline view's plan.
-    ExprSubstitutionMap composedSmap = ExprSubstitutionMap.compose(inlineViewSmap,
-        rootNode.getOutputSmap(), analyzer);
-    rootNode.setOutputSmap(composedSmap);
+    // the inline view are replaced with exprs referencing the physical output of the
+    // inline view's plan.
+    ExprSubstitutionMap outputSmap = ExprSubstitutionMap.compose(
+        inlineViewRef.getSmap(), rootNode.getOutputSmap(), analyzer);
+    if (analyzer.isOuterJoined(inlineViewRef.getId())) {
+      // Exprs against non-matched rows of an outer join should always return NULL.
+      // Make the rhs exprs of the output smap nullable, if necessary. This expr wrapping
+      // must be performed on the composed smap, and not on the the inline view's smap,
+      // because the rhs exprs must first be resolved against the physical output of
+      // 'planRoot' to correctly determine whether wrapping is necessary.
+      List<Expr> nullableRhs = TupleIsNullPredicate.wrapExprs(
+          outputSmap.getRhs(), rootNode.getTupleIds(), analyzer);
+      outputSmap = new ExprSubstitutionMap(outputSmap.getLhs(), nullableRhs);
+    }
+    // Set output smap of rootNode *before* creating a SelectNode for proper resolution.
+    rootNode.setOutputSmap(outputSmap);
 
     // If the inline view has a LIMIT/OFFSET or unassigned conjuncts due to analytic
     // functions, we may have conjuncts that need to be assigned to a SELECT node on
@@ -1164,22 +1187,13 @@ public class SingleNodePlanner {
 
     // Remove unregistered predicates that reference the same slot on
     // both sides (e.g. a = a). Such predicates have been generated from slot
-    // equivalences and may incorrectly reject rows with nulls (IMPALA-1412).
+    // equivalences and may incorrectly reject rows with nulls (IMPALA-1412/IMPALA-2643).
     Predicate<Expr> isIdentityPredicate = new Predicate<Expr>() {
       @Override
       public boolean apply(Expr expr) {
-        if (!(expr instanceof BinaryPredicate)
-            || ((BinaryPredicate) expr).getOp() != BinaryPredicate.Operator.EQ) {
-          return false;
-        }
-        if (!expr.isRegisteredPredicate()
-            && expr.getChild(0) instanceof SlotRef
-            && expr.getChild(1) instanceof SlotRef
-            && (((SlotRef) expr.getChild(0)).getSlotId() ==
-               ((SlotRef) expr.getChild(1)).getSlotId())) {
-          return true;
-        }
-        return false;
+        return com.cloudera.impala.analysis.Predicate.isEquivalencePredicate(expr)
+            && ((BinaryPredicate) expr).isInferred()
+            && expr.getChild(0).equals(expr.getChild(1));
       }
     };
     Iterables.removeIf(viewPredicates, isIdentityPredicate);
@@ -1210,25 +1224,103 @@ public class SingleNodePlanner {
   }
 
   /**
+   * Create a node to materialize the slots in the given HdfsTblRef.
+   *
+   * If 'hdfsTblRef' only contains partition columns and 'fastPartitionKeyScans'
+   * is true, the slots may be produced directly in this function using the metadata.
+   * Otherwise, a HdfsScanNode will be created.
+   */
+  private PlanNode createHdfsScanPlan(TableRef hdfsTblRef, boolean fastPartitionKeyScans,
+      Analyzer analyzer) throws ImpalaException {
+    HdfsTable hdfsTable = (HdfsTable)hdfsTblRef.getTable();
+    TupleDescriptor tupleDesc = hdfsTblRef.getDesc();
+
+    // Get all predicates bound by the tuple.
+    List<Expr> conjuncts = Lists.newArrayList();
+    conjuncts.addAll(analyzer.getBoundPredicates(tupleDesc.getId()));
+
+    // Also add remaining unassigned conjuncts
+    List<Expr> unassigned = analyzer.getUnassignedConjuncts(tupleDesc.getId().asList());
+    conjuncts.addAll(unassigned);
+    analyzer.markConjunctsAssigned(unassigned);
+
+    analyzer.createEquivConjuncts(tupleDesc.getId(), conjuncts);
+
+    // Do partition pruning before deciding which slots to materialize,
+    // We might end up removing some predicates.
+    HdfsPartitionPruner pruner = new HdfsPartitionPruner(tupleDesc);
+    List<HdfsPartition> partitions = pruner.prunePartitions(analyzer, conjuncts);
+
+    // Mark all slots referenced by the remaining conjuncts as materialized.
+    analyzer.materializeSlots(conjuncts);
+
+    // If the optimization for partition key scans with metadata is enabled,
+    // try evaluating with metadata first. If not, fall back to scanning.
+    if (fastPartitionKeyScans && tupleDesc.hasClusteringColsOnly()) {
+      HashSet<List<Expr>> uniqueExprs = new HashSet<List<Expr>>();
+
+      for (HdfsPartition partition: partitions) {
+        // Ignore empty partitions to match the behavior of the scan based approach.
+        if (partition.isDefaultPartition() || partition.getSize() == 0) {
+          continue;
+        }
+        List<Expr> exprs = Lists.newArrayList();
+        for (SlotDescriptor slotDesc: tupleDesc.getSlots()) {
+          // UnionNode.init() will go through all the slots in the tuple descriptor so
+          // there needs to be an entry in 'exprs' for each slot. For unmaterialized
+          // slots, use dummy null values. UnionNode will filter out unmaterialized slots.
+          if (!slotDesc.isMaterialized()) {
+            exprs.add(NullLiteral.create(slotDesc.getType()));
+          } else {
+            int pos = slotDesc.getColumn().getPosition();
+            exprs.add(partition.getPartitionValue(pos));
+          }
+        }
+        uniqueExprs.add(exprs);
+      }
+
+      // Create a UNION node with all unique partition keys.
+      UnionNode unionNode = new UnionNode(ctx_.getNextNodeId(), tupleDesc.getId());
+      for (List<Expr> exprList: uniqueExprs) {
+        unionNode.addConstExprList(exprList);
+      }
+      unionNode.init(analyzer);
+      return unionNode;
+    } else {
+      ScanNode scanNode =
+          new HdfsScanNode(ctx_.getNextNodeId(), tupleDesc, conjuncts, partitions,
+              hdfsTblRef.getReplicaPreference(), hdfsTblRef.getRandomReplica());
+      scanNode.init(analyzer);
+      return scanNode;
+    }
+  }
+
+  /**
    * Create node for scanning all data files of a particular table.
+   *
+   * 'fastPartitionKeyScans' indicates whether to try to produce the slots with
+   * metadata instead of table scans. Only applicable to HDFS tables.
+   *
    * Throws if a PlanNode.init() failed or if planning of the given
    * table ref is not implemented.
    */
-  private PlanNode createScanNode(Analyzer analyzer, TableRef tblRef)
-      throws ImpalaException {
+  private PlanNode createScanNode(TableRef tblRef, boolean fastPartitionKeyScans,
+      Analyzer analyzer) throws ImpalaException {
     ScanNode scanNode = null;
-    if (tblRef.getTable() instanceof HdfsTable) {
-      scanNode = new HdfsScanNode(ctx_.getNextNodeId(), tblRef.getDesc(),
-          (HdfsTable)tblRef.getTable());
-      scanNode.init(analyzer);
-      return scanNode;
-    } else if (tblRef.getTable() instanceof DataSourceTable) {
+    Table table = tblRef.getTable();
+    if (table instanceof HdfsTable) {
+      return createHdfsScanPlan(tblRef, fastPartitionKeyScans, analyzer);
+    } else if (table instanceof DataSourceTable) {
       scanNode = new DataSourceScanNode(ctx_.getNextNodeId(), tblRef.getDesc());
       scanNode.init(analyzer);
       return scanNode;
-    } else if (tblRef.getTable() instanceof HBaseTable) {
+    } else if (table instanceof HBaseTable) {
       // HBase table
       scanNode = new HBaseScanNode(ctx_.getNextNodeId(), tblRef.getDesc());
+    } else if (tblRef.getTable() instanceof KuduTable) {
+      scanNode = new KuduScanNode(ctx_.getNextNodeId(), tblRef.getDesc());
+      scanNode.init(analyzer);
+      return scanNode;
     } else {
       throw new NotImplementedException(
           "Planning not implemented for table ref class: " + tblRef.getClass());
@@ -1285,33 +1377,12 @@ public class SingleNodePlanner {
     List<Expr> candidates = analyzer.getEqJoinConjuncts(lhsTblRefIds, rhsTblRefIds);
     Preconditions.checkNotNull(candidates);
     for (Expr e: candidates) {
-      // Ignore predicate if one of its children is a constant.
-      if (e.getChild(0).isConstant() || e.getChild(1).isConstant()) continue;
-
-      Expr rhsExpr = null;
-      if (e.getChild(0).isBoundByTupleIds(rhsTblRefIds)) {
-        rhsExpr = e.getChild(0);
-      } else {
-        Preconditions.checkState(e.getChild(1).isBoundByTupleIds(rhsTblRefIds));
-        rhsExpr = e.getChild(1);
-      }
-
-      Expr lhsExpr = null;
-      if (e.getChild(1).isBoundByTupleIds(lhsTblRefIds)) {
-        lhsExpr = e.getChild(1);
-      } else if (e.getChild(0).isBoundByTupleIds(lhsTblRefIds)) {
-        lhsExpr = e.getChild(0);
-      } else {
-        // not an equi-join condition between the lhs and rhs ids
-        continue;
-      }
-
-      Preconditions.checkState(lhsExpr != rhsExpr);
-      BinaryPredicate joinConjunct =
-          new BinaryPredicate(((BinaryPredicate)e).getOp(), lhsExpr, rhsExpr);
+      if (!(e instanceof BinaryPredicate)) continue;
+      BinaryPredicate normalizedJoinConjunct =
+          getNormalizedEqPred(e, lhsTblRefIds, rhsTblRefIds, analyzer);
+      if (normalizedJoinConjunct == null) continue;
       analyzer.markConjunctAssigned(e);
-      joinConjunct.analyzeNoThrow(analyzer);
-      result.add(joinConjunct);
+      result.add(normalizedJoinConjunct);
     }
     if (!result.isEmpty()) return result;
 
@@ -1326,11 +1397,39 @@ public class SingleNodePlanner {
           // we only do this for one of the equivalent slots, all the other implied
           // equalities are redundant
           BinaryPredicate pred =
-              analyzer.createEqPredicate(lhsSlotIds.get(0), slotDesc.getId());
+              analyzer.createInferredEqPred(lhsSlotIds.get(0), slotDesc.getId());
           result.add(pred);
         }
       }
     }
+    return result;
+  }
+
+  /**
+   * Returns a normalized version of a binary equality predicate 'expr' where the lhs
+   * child expr is bound by some tuple in 'lhsTids' and the rhs child expr is bound by
+   * some tuple in 'rhsTids'. Returns 'expr' if this predicate is already normalized.
+   * Returns null in any of the following cases:
+   * 1. It is not an equality predicate
+   * 2. One of the operands is a constant
+   * 3. Both children of this predicate are the same expr
+   * 4. Cannot be normalized
+   */
+  public static BinaryPredicate getNormalizedEqPred(Expr expr, List<TupleId> lhsTids,
+      List<TupleId> rhsTids, Analyzer analyzer) {
+    if (!(expr instanceof BinaryPredicate)) return null;
+    BinaryPredicate pred = (BinaryPredicate) expr;
+    if (!pred.getOp().isEquivalence() && pred.getOp() != Operator.NULL_MATCHING_EQ) {
+      return null;
+    }
+    if (pred.getChild(0).isConstant() || pred.getChild(1).isConstant()) return null;
+
+    Expr lhsExpr = Expr.getFirstBoundChild(pred, lhsTids);
+    Expr rhsExpr = Expr.getFirstBoundChild(pred, rhsTids);
+    if (lhsExpr == null || rhsExpr == null || lhsExpr == rhsExpr) return null;
+
+    BinaryPredicate result = new BinaryPredicate(pred.getOp(), lhsExpr, rhsExpr);
+    result.analyzeNoThrow(analyzer);
     return result;
   }
 
@@ -1435,14 +1534,19 @@ public class SingleNodePlanner {
   /**
    * Create a tree of PlanNodes for the given tblRef, which can be a BaseTableRef,
    * CollectionTableRef or an InlineViewRef.
+   *
+   * 'fastPartitionKeyScans' indicates whether to try to produce the slots with
+   * metadata instead of table scans. Only applicable to BaseTableRef which is also
+   * an HDFS table.
+   *
    * Throws if a PlanNode.init() failed or if planning of the given
    * table ref is not implemented.
    */
   private PlanNode createTableRefNode(TableRef tblRef, boolean isStraightJoin,
-      Analyzer analyzer) throws ImpalaException {
+      boolean fastPartitionKeyScans, Analyzer analyzer) throws ImpalaException {
     PlanNode result = null;
     if (tblRef instanceof BaseTableRef) {
-      result = createScanNode(analyzer, tblRef);
+      result = createScanNode(tblRef, fastPartitionKeyScans, analyzer);
     } else if (tblRef instanceof CollectionTableRef) {
       if (tblRef.isRelative()) {
         Preconditions.checkState(ctx_.hasSubplan());
@@ -1450,7 +1554,7 @@ public class SingleNodePlanner {
             (CollectionTableRef) tblRef);
         result.init(analyzer);
       } else {
-        result = createScanNode(analyzer, tblRef);
+        result = createScanNode(tblRef, false, analyzer);
       }
     } else if (tblRef instanceof InlineViewRef) {
       result = createInlineViewPlan(analyzer, (InlineViewRef) tblRef);
@@ -1478,7 +1582,10 @@ public class SingleNodePlanner {
       throws ImpalaException {
     UnionNode unionNode = new UnionNode(ctx_.getNextNodeId(), unionStmt.getTupleId());
     for (UnionOperand op: unionOperands) {
-      if (op.getAnalyzer().hasEmptyResultSet()) continue;
+      if (op.getAnalyzer().hasEmptyResultSet()) {
+        unmarkCollectionSlots(op.getQueryStmt());
+        continue;
+      }
       QueryStmt queryStmt = op.getQueryStmt();
       if (queryStmt instanceof SelectStmt) {
         SelectStmt selectStmt = (SelectStmt) queryStmt;

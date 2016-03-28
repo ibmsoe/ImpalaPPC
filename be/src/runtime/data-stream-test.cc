@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include <boost/thread/thread.hpp>
-#include <gtest/gtest.h>
 
+#include "testutil/gtest-util.h"
 #include "common/init.h"
 #include "common/logging.h"
 #include "common/status.h"
@@ -29,7 +29,7 @@
 #include "runtime/data-stream-recvr.h"
 #include "runtime/descriptors.h"
 #include "runtime/client-cache.h"
-#include "runtime/raw-value.h"
+#include "runtime/raw-value.inline.h"
 #include "service/fe-support.h"
 #include "util/cpu-info.h"
 #include "util/disk-info.h"
@@ -55,6 +55,18 @@ using namespace apache::thrift::protocol;
 
 DEFINE_int32(port, 20001, "port on which to run Impala test backend");
 DECLARE_string(principal);
+DECLARE_int32(datastream_sender_timeout_ms);
+
+// We reserve contiguous memory for senders in SetUp. If a test uses more
+// senders, a DCHECK will fail and you should increase this value.
+static const int MAX_SENDERS = 16;
+static const int MAX_RECEIVERS = 16;
+static const PlanNodeId DEST_NODE_ID = 1;
+static const int BATCH_CAPACITY = 100;  // rows
+static const int PER_ROW_DATA = 8;
+static const int TOTAL_DATA_SIZE = 8 * 1024;
+static const int NUM_BATCHES = TOTAL_DATA_SIZE / BATCH_CAPACITY / PER_ROW_DATA;
+
 
 namespace impala {
 
@@ -71,6 +83,12 @@ class ImpalaTestBackend : public ImpalaInternalServiceIf {
 
   virtual void CancelPlanFragment(
       TCancelPlanFragmentResult& return_val, const TCancelPlanFragmentParams& params) {}
+
+  virtual void UpdateFilter(
+      TUpdateFilterResult& return_val, const TUpdateFilterParams& params) {}
+
+  virtual void PublishFilter(
+      TPublishFilterResult& return_val, const TPublishFilterParams& params) {}
 
   virtual void TransmitData(
       TTransmitDataResult& return_val, const TTransmitDataParams& params) {
@@ -95,16 +113,18 @@ class DataStreamTest : public testing::Test {
     // Initialize Mem trackers for use by the data stream receiver.
     exec_env_.InitForFeTests();
     runtime_state_.InitMemTrackers(TUniqueId(), NULL, -1);
+
+    // Stop tests that rely on mismatched sender / receiver pairs timing out from failing.
+    FLAGS_datastream_sender_timeout_ms = 250;
   }
 
   virtual void SetUp() {
     CreateRowDesc();
     CreateTupleComparator();
-    CreateRowBatch();
 
     next_instance_id_.lo = 0;
     next_instance_id_.hi = 0;
-    stream_mgr_ = new DataStreamMgr();
+    stream_mgr_ = new DataStreamMgr(new MetricGroup(""));
 
     broadcast_sink_.dest_node_id = DEST_NODE_ID;
     broadcast_sink_.output_partition.type = TPartitionType::UNPARTITIONED;
@@ -140,7 +160,7 @@ class DataStreamTest : public testing::Test {
       case TPartitionType::UNPARTITIONED: return broadcast_sink_;
       case TPartitionType::RANDOM: return random_sink_;
       case TPartitionType::HASH_PARTITIONED: return hash_sink_;
-      default: DCHECK(false) << "Unhandled sink type: " << partition_type;
+      default: EXPECT_TRUE(false) << "Unhandled sink type: " << partition_type;
     }
     // Should never reach this.
     return broadcast_sink_;
@@ -159,22 +179,11 @@ class DataStreamTest : public testing::Test {
     dest_.clear();
   }
 
-  // We reserve contiguous memory for senders in SetUp. If a test uses more
-  // senders, a DCHECK will fail and you should increase this value.
-  static const int MAX_SENDERS = 16;
-  static const int MAX_RECEIVERS = 16;
-  static const PlanNodeId DEST_NODE_ID = 1;
-  static const int BATCH_CAPACITY = 100;  // rows
-  static const int PER_ROW_DATA = 8;
-  static const int TOTAL_DATA_SIZE = 8 * 1024;
-  static const int NUM_BATCHES = TOTAL_DATA_SIZE / BATCH_CAPACITY / PER_ROW_DATA;
-
   ObjectPool obj_pool_;
   MemTracker tracker_;
   DescriptorTbl* desc_tbl_;
   const RowDescriptor* row_desc_;
   TupleRowComparator* less_than_;
-  MemTracker dummy_mem_tracker_;
   ExecEnv exec_env_;
   RuntimeState runtime_state_;
   TUniqueId next_instance_id_;
@@ -260,9 +269,8 @@ class DataStreamTest : public testing::Test {
     slot_desc.__set_nullIndicatorByte(0);
     slot_desc.__set_nullIndicatorBit(-1);
     slot_desc.__set_slotIdx(0);
-    slot_desc.__set_isMaterialized(true);
     thrift_desc_tbl.slotDescriptors.push_back(slot_desc);
-    EXPECT_TRUE(DescriptorTbl::Create(&obj_pool_, thrift_desc_tbl, &desc_tbl_).ok());
+    EXPECT_OK(DescriptorTbl::Create(&obj_pool_, thrift_desc_tbl, &desc_tbl_));
     runtime_state_.set_desc_tbl(desc_tbl_);
 
     vector<TTupleId> row_tids;
@@ -387,10 +395,10 @@ class DataStreamTest : public testing::Test {
     multiset<int64_t> all_data_values;
     for (int i = 0; i < receiver_info_.size(); ++i) {
       ReceiverInfo& info = receiver_info_[i];
-      EXPECT_TRUE(info.status.ok());
+      EXPECT_OK(info.status);
       total += info.data_values.size();
-      DCHECK_EQ(info.stream_type, stream_type);
-      DCHECK_EQ(info.num_senders, num_senders);
+      ASSERT_EQ(info.stream_type, stream_type);
+      ASSERT_EQ(info.num_senders, num_senders);
       if (stream_type == TPartitionType::UNPARTITIONED) {
         EXPECT_EQ(
             NUM_BATCHES * BATCH_CAPACITY * num_senders, info.data_values.size());
@@ -429,7 +437,7 @@ class DataStreamTest : public testing::Test {
 
   void CheckSenders() {
     for (int i = 0; i < sender_info_.size(); ++i) {
-      EXPECT_TRUE(sender_info_[i].status.ok());
+      EXPECT_OK(sender_info_[i].status);
       EXPECT_GT(sender_info_[i].num_bytes_sent, 0);
     }
   }
@@ -452,7 +460,7 @@ class DataStreamTest : public testing::Test {
                    int channel_buffer_size = 1024) {
     VLOG_QUERY << "start sender";
     int num_senders = sender_info_.size();
-    DCHECK_LT(num_senders, MAX_SENDERS);
+    ASSERT_LT(num_senders, MAX_SENDERS);
     sender_info_.push_back(SenderInfo());
     SenderInfo& info = sender_info_.back();
     info.thread_handle =
@@ -476,8 +484,8 @@ class DataStreamTest : public testing::Test {
     const TDataStreamSink& sink = GetSink(partition_type);
     DataStreamSender sender(
         &obj_pool_, sender_num, *row_desc_, sink, dest_, channel_buffer_size);
-    EXPECT_TRUE(sender.Prepare(&state).ok());
-    EXPECT_TRUE(sender.Open(&state).ok());
+    EXPECT_OK(sender.Prepare(&state));
+    EXPECT_OK(sender.Open(&state));
     scoped_ptr<RowBatch> batch(CreateRowBatch());
     SenderInfo& info = sender_info_[sender_num];
     int next_val = 0;
@@ -488,6 +496,7 @@ class DataStreamTest : public testing::Test {
       if (!info.status.ok()) break;
     }
     VLOG_QUERY << "closing sender" << sender_num;
+    sender.FlushFinal(&state);
     sender.Close(&state);
     info.num_bytes_sent = sender.GetNumDataBytesSent();
 
@@ -518,26 +527,25 @@ class DataStreamTest : public testing::Test {
 };
 
 TEST_F(DataStreamTest, UnknownSenderSmallResult) {
-  // starting a sender w/o a corresponding receiver does not result in an error because
-  // we cannot distinguish whether a receiver was never created or the receiver
-  // willingly tore down the stream
-  // case 1: entire query result fits in single buffer, close() returns ok
+  // starting a sender w/o a corresponding receiver results in an error. No bytes should
+  // be sent.
+  // case 1: entire query result fits in single buffer
   TUniqueId dummy_id;
   GetNextInstanceId(&dummy_id);
   StartSender(TPartitionType::UNPARTITIONED, TOTAL_DATA_SIZE + 1024);
   JoinSenders();
-  EXPECT_TRUE(sender_info_[0].status.ok());
-  EXPECT_GT(sender_info_[0].num_bytes_sent, 0);
+  EXPECT_EQ(sender_info_[0].status.code(), TErrorCode::DATASTREAM_SENDER_TIMEOUT);
+  EXPECT_EQ(sender_info_[0].num_bytes_sent, 0);
 }
 
 TEST_F(DataStreamTest, UnknownSenderLargeResult) {
-  // case 2: query result requires multiple buffers, send() returns ok
+  // case 2: query result requires multiple buffers
   TUniqueId dummy_id;
   GetNextInstanceId(&dummy_id);
   StartSender();
   JoinSenders();
-  EXPECT_TRUE(sender_info_[0].status.ok());
-  EXPECT_GT(sender_info_[0].num_bytes_sent, 0);
+  EXPECT_EQ(sender_info_[0].status.code(), TErrorCode::DATASTREAM_SENDER_TIMEOUT);
+  EXPECT_EQ(sender_info_[0].num_bytes_sent, 0);
 }
 
 TEST_F(DataStreamTest, Cancel) {
@@ -572,6 +580,57 @@ TEST_F(DataStreamTest, BasicTest) {
       }
     }
   }
+}
+
+// This test checks for the avoidance of IMPALA-2931, which is a crash that would occur if
+// the parent memtracker of a DataStreamRecvr's memtracker was deleted before the
+// DataStreamRecvr was destroyed. The fix was to move decoupling the child tracker from
+// the parent into DataStreamRecvr::Close() which should always be called before the
+// parent is destroyed. In practice the parent is a member of the query's runtime state.
+//
+// TODO: Make lifecycle requirements more explicit.
+TEST_F(DataStreamTest, CloseRecvrWhileReferencesRemain) {
+  scoped_ptr<RuntimeState> runtime_state(
+      new RuntimeState(TExecPlanFragmentParams(), "", &exec_env_));
+  runtime_state->InitMemTrackers(TUniqueId(), NULL, -1);
+
+  scoped_ptr<RuntimeProfile> profile(new RuntimeProfile(&obj_pool_, "TestReceiver"));
+
+  // Start just one receiver.
+  TUniqueId instance_id;
+  GetNextInstanceId(&instance_id);
+  shared_ptr<DataStreamRecvr> stream_recvr = stream_mgr_->CreateRecvr(runtime_state.get(),
+      *row_desc_, instance_id, DEST_NODE_ID, 1, 1, profile.get(), false);
+
+  // Perform tear down, but keep a reference to the receiver so that it is deleted last
+  // (to confirm that the destructor does not access invalid state after tear-down).
+  stream_recvr->Close();
+
+  // Force deletion of the parent memtracker by destroying it's owning runtime state.
+  runtime_state.reset();
+
+  // Send an eos RPC to the receiver. Not required for tear-down, but confirms that the
+  // RPC does not cause an error (the receiver will still be called, since it is only
+  // Close()'d, not deleted from the data stream manager).
+  Status rpc_status;
+  ImpalaInternalServiceConnection client(exec_env_.impalad_client_cache(),
+      MakeNetworkAddress("localhost", FLAGS_port), &rpc_status);
+  EXPECT_TRUE(rpc_status.ok());
+  TTransmitDataParams params;
+  params.protocol_version = ImpalaInternalServiceVersion::V1;
+  params.__set_eos(true);
+  params.__set_dest_fragment_instance_id(instance_id);
+  params.__set_dest_node_id(DEST_NODE_ID);
+  TUniqueId dummy_id;
+  params.__set_sender_id(0);
+
+  TTransmitDataResult result;
+  rpc_status =
+      client.DoRpc(&ImpalaInternalServiceClient::TransmitData, params, &result);
+
+  // Finally, stream_recvr destructor happens here. Before fix for IMPALA-2931, this
+  // would have resulted in a crash.
+  stream_recvr.reset();
 }
 
 // TODO: more tests:

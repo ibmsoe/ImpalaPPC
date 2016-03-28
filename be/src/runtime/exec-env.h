@@ -44,6 +44,7 @@ class ThreadResourceMgr;
 class CgroupsManager;
 class ImpalaServer;
 class RequestPoolService;
+class FragmentMgr;
 class Frontend;
 class TmpFileMgr;
 
@@ -89,8 +90,13 @@ class ExecEnv {
   CgroupsMgr* cgroups_mgr() { return cgroups_mgr_.get(); }
   HdfsOpThreadPool* hdfs_op_thread_pool() { return hdfs_op_thread_pool_.get(); }
   TmpFileMgr* tmp_file_mgr() { return tmp_file_mgr_.get(); }
+  CallableThreadPool* fragment_exec_thread_pool() {
+    return fragment_exec_thread_pool_.get();
+  }
   ImpalaServer* impala_server() { return impala_server_; }
   Frontend* frontend() { return frontend_.get(); };
+  RequestPoolService* request_pool_service() { return request_pool_service_.get(); }
+  CallableThreadPool* rpc_pool() { return async_rpc_pool_.get(); }
 
   void set_enable_webserver(bool enable) { enable_webserver_ = enable; }
 
@@ -118,6 +124,7 @@ class ExecEnv {
 
  protected:
   /// Leave protected so that subclasses can override
+  boost::scoped_ptr<MetricGroup> metrics_;
   boost::scoped_ptr<DataStreamMgr> stream_mgr_;
   boost::scoped_ptr<ResourceBroker> resource_broker_;
   boost::scoped_ptr<Scheduler> scheduler_;
@@ -127,7 +134,6 @@ class ExecEnv {
   boost::scoped_ptr<HBaseTableFactory> htable_factory_;
   boost::scoped_ptr<DiskIoMgr> disk_io_mgr_;
   boost::scoped_ptr<Webserver> webserver_;
-  boost::scoped_ptr<MetricGroup> metrics_;
   boost::scoped_ptr<MemTracker> mem_tracker_;
   boost::scoped_ptr<ThreadResourceMgr> thread_mgr_;
   boost::scoped_ptr<CgroupsMgr> cgroups_mgr_;
@@ -135,6 +141,8 @@ class ExecEnv {
   boost::scoped_ptr<TmpFileMgr> tmp_file_mgr_;
   boost::scoped_ptr<RequestPoolService> request_pool_service_;
   boost::scoped_ptr<Frontend> frontend_;
+  boost::scoped_ptr<CallableThreadPool> fragment_exec_thread_pool_;
+  boost::scoped_ptr<CallableThreadPool> async_rpc_pool_;
 
   /// Not owned by this class
   ImpalaServer* impala_server_;

@@ -73,7 +73,6 @@ Status HBaseScanNode::Prepare(RuntimeState* state) {
   const vector<SlotDescriptor*>& slots = tuple_desc_->slots();
   sorted_non_key_slots_.reserve(slots.size());
   for (int i = 0; i < slots.size(); ++i) {
-    if (!slots[i]->is_materialized()) continue;
     if (slots[i]->col_pos() == ROW_KEY) {
       row_key_slot_ = slots[i];
     } else {
@@ -172,7 +171,7 @@ Status HBaseScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eo
   while (true) {
     RETURN_IF_CANCELLED(state);
     RETURN_IF_ERROR(QueryMaintenance(state));
-    if (ReachedLimit() || row_batch->AtCapacity(row_batch->tuple_data_pool())) {
+    if (ReachedLimit() || row_batch->AtCapacity()) {
       // hang on to last allocated chunk in pool, we'll keep writing into it in the
       // next GetNext() call
       *eos = ReachedLimit();

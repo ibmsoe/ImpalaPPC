@@ -23,6 +23,7 @@ import java.util.Map;
 import org.apache.commons.lang.StringUtils;
 
 import com.cloudera.impala.catalog.ColumnStats;
+import com.cloudera.impala.catalog.HdfsTable;
 import com.cloudera.impala.catalog.StructType;
 import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.catalog.View;
@@ -96,6 +97,15 @@ public class TupleDescriptor {
 
   public TupleId getId() { return id_; }
   public ArrayList<SlotDescriptor> getSlots() { return slots_; }
+
+  public ArrayList<SlotDescriptor> getMaterializedSlots() {
+    ArrayList<SlotDescriptor> result = Lists.newArrayList();
+    for (SlotDescriptor slot: slots_) {
+      if (slot.isMaterialized()) result.add(slot);
+    }
+    return result;
+  }
+
   public Table getTable() {
     if (path_ == null) return null;
     return path_.getRootTable();
@@ -260,6 +270,24 @@ public class TupleDescriptor {
     }
 
     this.byteSize_ = offset;
+  }
+
+  /**
+   * Return true if the slots being materialized are all partition columns.
+   */
+  public boolean hasClusteringColsOnly() {
+    Table table = getTable();
+    if (!(table instanceof HdfsTable) || table.getNumClusteringCols() == 0) return false;
+
+    HdfsTable hdfsTable = (HdfsTable)table;
+    for (SlotDescriptor slotDesc: getSlots()) {
+      if (!slotDesc.isMaterialized()) continue;
+      if (slotDesc.getColumn() == null ||
+          slotDesc.getColumn().getPosition() >= hdfsTable.getNumClusteringCols()) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

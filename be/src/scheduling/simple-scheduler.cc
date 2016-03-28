@@ -56,12 +56,7 @@ DECLARE_bool(enable_rm);
 DECLARE_int32(rm_default_cpu_vcores);
 DECLARE_string(rm_default_memory);
 
-DEFINE_bool(disable_admission_control, true, "Disables admission control.");
-
-DEFINE_bool(require_username, false, "Requires that a user be provided in order to "
-    "schedule requests. If enabled and a user is not provided, requests will be "
-    "rejected, otherwise requests without a username will be submitted with the "
-    "username 'default'.");
+DEFINE_bool(disable_admission_control, false, "Disables admission control.");
 
 namespace impala {
 
@@ -69,19 +64,11 @@ static const string LOCAL_ASSIGNMENTS_KEY("simple-scheduler.local-assignments.to
 static const string ASSIGNMENTS_KEY("simple-scheduler.assignments.total");
 static const string SCHEDULER_INIT_KEY("simple-scheduler.initialized");
 static const string NUM_BACKENDS_KEY("simple-scheduler.num-backends");
-static const string DEFAULT_USER("default");
 
 static const string BACKENDS_WEB_PAGE = "/backends";
 static const string BACKENDS_TEMPLATE = "backends.tmpl";
 
 const string SimpleScheduler::IMPALA_MEMBERSHIP_TOPIC("impala-membership");
-
-static const string ERROR_USER_TO_POOL_MAPPING_NOT_FOUND(
-    "No mapping found for request from user '$0' with requested pool '$1'");
-static const string ERROR_USER_NOT_ALLOWED_IN_POOL("Request from user '$0' with "
-    "requested pool '$1' denied access to assigned pool '$2'");
-static const string ERROR_USER_NOT_SPECIFIED("User must be specified because "
-    "-require_username=true.");
 
 SimpleScheduler::SimpleScheduler(StatestoreSubscriber* subscriber,
     const string& backend_id, const TNetworkAddress& backend_address,
@@ -103,7 +90,7 @@ SimpleScheduler::SimpleScheduler(StatestoreSubscriber* subscriber,
   if (FLAGS_disable_admission_control) LOG(INFO) << "Admission control is disabled.";
   if (!FLAGS_disable_admission_control) {
     admission_controller_.reset(
-        new AdmissionController(request_pool_service_, metrics, backend_id_));
+        new AdmissionController(request_pool_service_, metrics, backend_address));
   }
 
   if (FLAGS_enable_rm) {
@@ -114,7 +101,8 @@ SimpleScheduler::SimpleScheduler(StatestoreSubscriber* subscriber,
     }
     bool is_percent;
     int64_t mem_bytes =
-        ParseUtil::ParseMemSpec(FLAGS_rm_default_memory, &is_percent, MemInfo::physical_mem());
+        ParseUtil::ParseMemSpec(
+            FLAGS_rm_default_memory, &is_percent, MemInfo::physical_mem());
     if (mem_bytes <= 1024 * 1024) {
       LOG(ERROR) << "Bad value for --rm_default_memory (must be larger than 1M):"
                  << FLAGS_rm_default_memory;
@@ -145,7 +133,7 @@ SimpleScheduler::SimpleScheduler(const vector<TNetworkAddress>& backends,
   // request_pool_service_ may be null in unit tests
   if (request_pool_service_ != NULL && !FLAGS_disable_admission_control) {
     admission_controller_.reset(
-        new AdmissionController(request_pool_service_, metrics, backend_id_));
+        new AdmissionController(request_pool_service_, metrics, TNetworkAddress()));
   }
 
   for (int i = 0; i < backends.size(); ++i) {
@@ -204,7 +192,7 @@ Status SimpleScheduler::Init() {
     total_assignments_ = metrics_->AddCounter<int64_t>(ASSIGNMENTS_KEY, 0);
     total_local_assignments_ = metrics_->AddCounter<int64_t>(LOCAL_ASSIGNMENTS_KEY, 0);
     initialised_ = metrics_->AddProperty(SCHEDULER_INIT_KEY, true);
-    num_backends_metric_ = metrics_->AddGauge<int64_t>(
+    num_fragment_instances_metric_ = metrics_->AddGauge<int64_t>(
         NUM_BACKENDS_KEY, backend_map_.size());
   }
 
@@ -357,7 +345,9 @@ void SimpleScheduler::UpdateMembership(
       update.topic_name = IMPALA_MEMBERSHIP_TOPIC;
       update.topic_deletions.push_back(backend_id_);
     }
-    if (metrics_ != NULL) num_backends_metric_->set_value(current_membership_.size());
+    if (metrics_ != NULL) {
+      num_fragment_instances_metric_->set_value(current_membership_.size());
+    }
   }
 }
 
@@ -440,36 +430,57 @@ Status SimpleScheduler::ComputeScanRangeAssignment(const TQueryExecRequest& exec
   map<TPlanNodeId, vector<TScanRangeLocations> >::const_iterator entry;
   for (entry = exec_request.per_node_scan_ranges.begin();
       entry != exec_request.per_node_scan_ranges.end(); ++entry) {
-    int fragment_idx = schedule->GetFragmentIdx(entry->first);
+    const TPlanNodeId node_id = entry->first;
+    int fragment_idx = schedule->GetFragmentIdx(node_id);
     const TPlanFragment& fragment = exec_request.fragments[fragment_idx];
     bool exec_at_coord = (fragment.partition.type == TPartitionType::UNPARTITIONED);
+
+    const TPlanNode& node = fragment.plan.nodes[schedule->GetNodeIdx(node_id)];
+    DCHECK_EQ(node.node_id, node_id);
+
+    const TReplicaPreference::type* node_replica_preference = node.__isset.hdfs_scan_node
+        && node.hdfs_scan_node.__isset.replica_preference
+        ? &node.hdfs_scan_node.replica_preference : NULL;
+    bool node_random_replica = node.__isset.hdfs_scan_node &&
+        node.hdfs_scan_node.__isset.random_replica &&
+        node.hdfs_scan_node.random_replica;
 
     FragmentScanRangeAssignment* assignment =
         &(*schedule->exec_params())[fragment_idx].scan_range_assignment;
     RETURN_IF_ERROR(ComputeScanRangeAssignment(
-        entry->first, entry->second, exec_request.host_list, exec_at_coord,
-        schedule->query_options(), assignment));
+        node_id, node_replica_preference, node_random_replica, entry->second,
+        exec_request.host_list, exec_at_coord, schedule->query_options(), assignment));
     schedule->AddScanRanges(entry->second.size());
   }
   return Status::OK();
 }
 
 Status SimpleScheduler::ComputeScanRangeAssignment(
-    PlanNodeId node_id, const vector<TScanRangeLocations>& locations,
+    PlanNodeId node_id, const TReplicaPreference::type* node_replica_preference,
+    bool node_random_replica, const vector<TScanRangeLocations>& locations,
     const vector<TNetworkAddress>& host_list, bool exec_at_coord,
     const TQueryOptions& query_options, FragmentScanRangeAssignment* assignment) {
-  // If cached reads are enabled, we will always prefer cached replicas over non-cached
-  // replicas. Since it is likely that only one replica is cached, this could generate
-  // hotspots which is why this is controllable by a query option.
-  //
-  // We schedule greedily in this order:
-  // cached collocated replicas > collocated replicas > remote (cached or not) replicas.
-  // The query option to disable cached reads removes the first group.
-  bool schedule_with_caching = !query_options.disable_cached_reads;
+  // We adjust all replicas with memory distance less than base_distance to base_distance
+  // and view all replicas with equal or better distance as the same. For a full list of
+  // memory distance classes see TReplicaPreference in ImpalaInternalService.thrift.
+  TReplicaPreference::type base_distance = query_options.replica_preference;
+  // The query option to disable cached reads adjusts the memory base distance to view
+  // all replicas as disk_local or worse.
+  // TODO remove in CDH6
+  if (query_options.disable_cached_reads &&
+      base_distance == TReplicaPreference::CACHE_LOCAL) {
+    base_distance = TReplicaPreference::DISK_LOCAL;
+  }
 
-  // map from datanode host to total assigned bytes;
-  // If the data node does not have a collocated impalad, the actual assigned bytes is
-  // "total assigned - numeric_limits<int64_t>::max()".
+  // A preference attached to the plan node takes precedence.
+  if (node_replica_preference) base_distance = *node_replica_preference;
+
+  // On otherwise equivalent disk replicas we either pick the first one, or we pick a
+  // random one. Picking random ones helps with preventing hot spots across several
+  // queries. On cached replica we will always break ties randomly.
+  bool random_non_cached_tiebreak = node_random_replica || query_options.random_replica;
+
+  // map from datanode host to total assigned bytes.
   unordered_map<TNetworkAddress, uint64_t> assigned_bytes_per_host;
   unordered_set<TNetworkAddress> remote_hosts;
   int64_t remote_bytes = 0L;
@@ -477,60 +488,92 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
   int64_t cached_bytes = 0L;
 
   BOOST_FOREACH(const TScanRangeLocations& scan_range_locations, locations) {
-    // assign this scan range to the host w/ the fewest assigned bytes
+    // Assign scans to replica with smallest memory distance.
+    TReplicaPreference::type min_distance = TReplicaPreference::REMOTE;
+    // Assign this scan range to the host w/ the fewest assigned bytes.
     uint64_t min_assigned_bytes = numeric_limits<uint64_t>::max();
     const TNetworkAddress* data_host = NULL;  // data server; not necessarily backend
     int volume_id = -1;
     bool is_cached = false;
+    bool remote_read = false;
 
-    // Separate cached replicas from non-cached replicas
-    vector<const TScanRangeLocation*> cached_locations;
-    if (schedule_with_caching) {
-      BOOST_FOREACH(const TScanRangeLocation& location, scan_range_locations.locations) {
-        // Adjust whether or not this replica should count as being cached based on
-        // the query option and whether it is collocated. If the DN is not collocated
-        // treat the replica as not cached (network transfer dominates anyway in this
-        // case).
+    // Equivalent replicas have the same adjusted memory distance and the same number of
+    // assigned bytes.
+    int num_equivalent_replicas = 0;
+    BOOST_FOREACH(const TScanRangeLocation& location, scan_range_locations.locations) {
+      TReplicaPreference::type memory_distance = TReplicaPreference::REMOTE;
+      const TNetworkAddress& replica_host = host_list[location.host_idx];
+      if (HasLocalBackend(replica_host)) {
+        // Adjust whether or not this replica should count as being cached based on the
+        // query option and whether it is collocated. If the DN is not collocated treat
+        // the replica as not cached (network transfer dominates anyway in this case).
         // TODO: measure this in a cluster setup. Are remote reads better with caching?
-        if (location.is_cached && HasLocalBackend(host_list[location.host_idx])) {
-          cached_locations.push_back(&location);
-        }
-      }
-    }
-    // If no replicas are cached find the ones based on assigned bytes
-    if (cached_locations.size() == 0) {
-      BOOST_FOREACH(const TScanRangeLocation& location, scan_range_locations.locations) {
-        DCHECK_LT(location.host_idx, host_list.size());
-        const TNetworkAddress& replica_host = host_list[location.host_idx];
-        // Deprioritize non-collocated datanodes by assigning a very high initial bytes
-        uint64_t initial_bytes =
-            HasLocalBackend(replica_host) ? 0L : numeric_limits<int64_t>::max();
-        uint64_t* assigned_bytes =
-            FindOrInsert(&assigned_bytes_per_host, replica_host, initial_bytes);
-        // Update the assignment if this is a less busy host.
-        if (*assigned_bytes < min_assigned_bytes) {
-          min_assigned_bytes = *assigned_bytes;
-          data_host = &replica_host;
-          volume_id = location.volume_id;
+        if (location.is_cached) {
+          is_cached = true;
+          memory_distance = TReplicaPreference::CACHE_LOCAL;
+        } else {
           is_cached = false;
+          memory_distance = TReplicaPreference::DISK_LOCAL;
+        }
+        remote_read = false;
+      } else {
+        is_cached = false;
+        remote_read = true;
+        memory_distance = TReplicaPreference::REMOTE;
+      }
+      memory_distance = max(memory_distance, base_distance);
+
+      // Named variable is needed here for template parameter deduction to work.
+      uint64_t initial_bytes = 0L;
+      uint64_t assigned_bytes =
+          *FindOrInsert(&assigned_bytes_per_host, replica_host, initial_bytes);
+
+      bool found_new_replica = false;
+
+      // Check if we can already accept based on memory distance.
+      if (memory_distance < min_distance) {
+        min_distance = memory_distance;
+        num_equivalent_replicas = 1;
+        found_new_replica = true;
+      } else if (memory_distance == min_distance) {
+        // Check the effective memory distance of the current replica to decide whether to
+        // treat it as cached. If the actual distance has been increased to base_distance,
+        // then cached_replica will be different from is_cached.
+        bool cached_replica = memory_distance == TReplicaPreference::CACHE_LOCAL;
+        // Load based scheduling
+        if (assigned_bytes < min_assigned_bytes) {
+          num_equivalent_replicas = 1;
+          found_new_replica = true;
+        } else if (assigned_bytes == min_assigned_bytes &&
+            (random_non_cached_tiebreak || cached_replica)) {
+          // We do reservoir sampling: assume we have k equivalent replicas and encounter
+          // another equivalent one. Then we want to select the new one with probability
+          // 1/(k+1). This is achieved by rand % k+1 == 0. Now, assume the probability for
+          // one of the other replicas to be selected had been 1/k before. It will now be
+          // 1/k * k/(k+1) = 1/(k+1). Thus we achieve the goal of picking a replica
+          // uniformly at random.
+          ++num_equivalent_replicas;
+          const int r = rand();  // make debugging easier.
+          found_new_replica = (r % num_equivalent_replicas == 0);
         }
       }
-    } else {
-      // Randomly pick a cached host based on the extracted list of cached local hosts
-      size_t rand_host = rand() % cached_locations.size();
-      const TNetworkAddress& replica_host = host_list[cached_locations[rand_host]->host_idx];
-      uint64_t initial_bytes = 0L;
-      min_assigned_bytes = *FindOrInsert(&assigned_bytes_per_host, replica_host, initial_bytes);
-      data_host = &replica_host;
-      volume_id = cached_locations[rand_host]->volume_id;
-      is_cached = true;
-    }
+
+      if (found_new_replica) {
+        min_assigned_bytes = assigned_bytes;
+        data_host = &replica_host;
+        volume_id = location.volume_id;
+      }
+    }  // end of BOOST_FOREACH
 
     int64_t scan_range_length = 0;
     if (scan_range_locations.scan_range.__isset.hdfs_file_split) {
       scan_range_length = scan_range_locations.scan_range.hdfs_file_split.length;
+    } else if (scan_range_locations.scan_range.__isset.kudu_key_range) {
+      // Hack so that kudu ranges are well distributed.
+      // TODO: KUDU-1133 Use the tablet size instead.
+      scan_range_length = 1000;
     }
-    bool remote_read = min_assigned_bytes >= numeric_limits<int64_t>::max();
+
     if (remote_read) {
       remote_bytes += scan_range_length;
       remote_hosts.insert(*data_host);
@@ -579,6 +622,7 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
       BOOST_FOREACH(const TNetworkAddress& remote_host, remote_hosts) {
         remote_node_log << remote_host << " ";
       }
+      VLOG_FILE << remote_node_log.str();
     }
 
     BOOST_FOREACH(FragmentScanRangeAssignment::value_type& entry, *assignment) {
@@ -600,10 +644,10 @@ void SimpleScheduler::ComputeFragmentExecParams(const TQueryExecRequest& exec_re
     QuerySchedule* schedule) {
   vector<FragmentExecParams>* fragment_exec_params = schedule->exec_params();
   // assign instance ids
-  int64_t num_backends = 0;
+  int64_t num_fragment_instances = 0;
   BOOST_FOREACH(FragmentExecParams& params, *fragment_exec_params) {
     for (int j = 0; j < params.hosts.size(); ++j) {
-      int instance_num = num_backends + j;
+      int instance_num = num_fragment_instances + j;
       // we add instance_num to query_id.lo to create a globally-unique instance id
       TUniqueId instance_id;
       instance_id.hi = schedule->query_id().hi;
@@ -612,13 +656,13 @@ void SimpleScheduler::ComputeFragmentExecParams(const TQueryExecRequest& exec_re
       instance_id.lo = schedule->query_id().lo + instance_num + 1;
       params.instance_ids.push_back(instance_id);
     }
-    num_backends += params.hosts.size();
+    num_fragment_instances += params.hosts.size();
   }
   if (exec_request.fragments[0].partition.type == TPartitionType::UNPARTITIONED) {
     // the root fragment is executed directly by the coordinator
-    --num_backends;
+    --num_fragment_instances;
   }
-  schedule->set_num_backends(num_backends);
+  schedule->set_num_fragment_instances(num_fragment_instances);
 
   // compute destinations and # senders per exchange node
   // (the root fragment doesn't have a destination)
@@ -664,6 +708,7 @@ void SimpleScheduler::ComputeFragmentHosts(const TQueryExecRequest& exec_request
   scan_node_types.push_back(TPlanNodeType::HDFS_SCAN_NODE);
   scan_node_types.push_back(TPlanNodeType::HBASE_SCAN_NODE);
   scan_node_types.push_back(TPlanNodeType::DATA_SOURCE_NODE);
+  scan_node_types.push_back(TPlanNodeType::KUDU_SCAN_NODE);
 
   // compute hosts of producer fragment before those of consumer fragment(s),
   // the latter might inherit the set of hosts from the former
@@ -823,55 +868,27 @@ int SimpleScheduler::FindSenderFragment(TPlanNodeId exch_id, int fragment_idx,
   return g_ImpalaInternalService_constants.INVALID_PLAN_NODE_ID;
 }
 
-Status SimpleScheduler::GetRequestPool(const string& user,
-    const TQueryOptions& query_options, string* pool) const {
-  TResolveRequestPoolResult resolve_pool_result;
-  const string& configured_pool = query_options.request_pool;
-  RETURN_IF_ERROR(request_pool_service_->ResolveRequestPool(configured_pool, user,
-        &resolve_pool_result));
-  if (resolve_pool_result.status.status_code != TErrorCode::OK) {
-    return Status(join(resolve_pool_result.status.error_msgs, "; "));
-  }
-  if (resolve_pool_result.resolved_pool.empty()) {
-    return Status(Substitute(ERROR_USER_TO_POOL_MAPPING_NOT_FOUND, user,
-          configured_pool));
-  }
-  if (!resolve_pool_result.has_access) {
-    return Status(Substitute(ERROR_USER_NOT_ALLOWED_IN_POOL, user,
-          configured_pool, resolve_pool_result.resolved_pool));
-  }
-  *pool = resolve_pool_result.resolved_pool;
-  return Status::OK();
-}
-
 Status SimpleScheduler::Schedule(Coordinator* coord, QuerySchedule* schedule) {
-  if (schedule->effective_user().empty()) {
-    if (FLAGS_require_username) return Status(ERROR_USER_NOT_SPECIFIED);
-    // Fall back to a 'default' user if not set so that queries can still run.
-    VLOG(2) << "No user specified: using user=default";
-  }
-  const string& user =
-    schedule->effective_user().empty() ? DEFAULT_USER : schedule->effective_user();
-  VLOG(3) << "user='" << user << "'";
-  string pool;
-  RETURN_IF_ERROR(GetRequestPool(user, schedule->query_options(), &pool));
-  schedule->set_request_pool(pool);
-  // Statestore topic may not have been updated yet if this is soon after startup, but
-  // there is always at least this backend.
-  schedule->set_num_hosts(max<int64_t>(num_backends_metric_->value(), 1));
+  string resolved_pool;
+  RETURN_IF_ERROR(request_pool_service_->ResolveRequestPool(
+      schedule->request().query_ctx, &resolved_pool));
+  schedule->set_request_pool(resolved_pool);
+  schedule->summary_profile()->AddInfoString("Request Pool", resolved_pool);
 
-  if (!FLAGS_disable_admission_control) {
-    RETURN_IF_ERROR(admission_controller_->AdmitQuery(schedule));
-  }
   if (ExecEnv::GetInstance()->impala_server()->IsOffline()) {
-    return Status("This Impala server is offine. Please retry your query later.");
+    return Status("This Impala server is offline. Please retry your query later.");
   }
 
   RETURN_IF_ERROR(ComputeScanRangeAssignment(schedule->request(), schedule));
   ComputeFragmentHosts(schedule->request(), schedule);
   ComputeFragmentExecParams(schedule->request(), schedule);
+  if (!FLAGS_disable_admission_control) {
+    RETURN_IF_ERROR(admission_controller_->AdmitQuery(schedule));
+  }
   if (!FLAGS_enable_rm) return Status::OK();
-  schedule->PrepareReservationRequest(pool, user);
+  string user = coord->runtime_state()->effective_user();
+  if (user.empty()) user = "default";
+  schedule->PrepareReservationRequest(resolved_pool, user);
   const TResourceBrokerReservationRequest& reservation_request =
       schedule->reservation_request();
   if (!reservation_request.resources.empty()) {

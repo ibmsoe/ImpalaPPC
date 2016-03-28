@@ -17,8 +17,7 @@
 #include <iostream>
 #include <vector>
 
-#include <gtest/gtest.h>
-
+#include "testutil/gtest-util.h"
 #include "common/compiler-util.h"
 #include "exec/old-hash-table.inline.h"
 #include "exprs/expr.h"
@@ -55,17 +54,13 @@ class OldHashTableTest : public testing::Test {
     // internals so a simple build/probe expr is fine.
     Expr* expr = pool_.Add(new SlotRef(TYPE_INT, 0));
     build_expr_ctxs_.push_back(pool_.Add(new ExprContext(expr)));
-    status = Expr::Prepare(build_expr_ctxs_, NULL, desc, &tracker_);
-    EXPECT_TRUE(status.ok());
-    status = Expr::Open(build_expr_ctxs_, NULL);
-    EXPECT_TRUE(status.ok());
+    ASSERT_OK(Expr::Prepare(build_expr_ctxs_, NULL, desc, &tracker_));
+    ASSERT_OK(Expr::Open(build_expr_ctxs_, NULL));
 
     expr = pool_.Add(new SlotRef(TYPE_INT, 0));
     probe_expr_ctxs_.push_back(pool_.Add(new ExprContext(expr)));
-    status = Expr::Prepare(probe_expr_ctxs_, NULL, desc, &tracker_);
-    EXPECT_TRUE(status.ok());
-    status = Expr::Open(probe_expr_ctxs_, NULL);
-    EXPECT_TRUE(status.ok());
+    ASSERT_OK(Expr::Prepare(probe_expr_ctxs_, NULL, desc, &tracker_));
+    ASSERT_OK(Expr::Open(probe_expr_ctxs_, NULL));
   }
 
   virtual void TearDown() {
@@ -199,7 +194,8 @@ TEST_F(OldHashTableTest, BasicTest) {
   // Create the hash table and insert the build rows
   MemTracker tracker;
   OldHashTable hash_table(NULL, build_expr_ctxs_, probe_expr_ctxs_,
-                       1, false, false, 0, &tracker);
+      vector<ExprContext*>(), 1, false, std::vector<bool>(build_expr_ctxs_.size(), false),
+      0, &tracker, vector<RuntimeFilter*>());
   for (int i = 0; i < 5; ++i) {
     hash_table.Insert(build_rows[i]);
   }
@@ -241,7 +237,9 @@ TEST_F(OldHashTableTest, BasicTest) {
 TEST_F(OldHashTableTest, ScanTest) {
   MemTracker tracker;
   OldHashTable hash_table(NULL, build_expr_ctxs_, probe_expr_ctxs_,
-                       1, false, false, 0, &tracker);
+      vector<ExprContext*>(), 1, false,
+      std::vector<bool>(build_expr_ctxs_.size(), false), 0, &tracker,
+      vector<RuntimeFilter*>());
   // Add 1 row with val 1, 2 with val 2, etc
   vector<TupleRow*> build_rows;
   ProbeTestData probe_rows[15];
@@ -287,7 +285,9 @@ TEST_F(OldHashTableTest, GrowTableTest) {
   int expected_size = 0;
   MemTracker tracker(100 * 1024 * 1024);
   OldHashTable hash_table(NULL, build_expr_ctxs_, probe_expr_ctxs_,
-                       1, false, false, 0, &tracker, false, num_to_add);
+      vector<ExprContext*>(), 1, false,
+      std::vector<bool>(build_expr_ctxs_.size(), false), 0, &tracker,
+      vector<RuntimeFilter*>(), false, num_to_add);
   EXPECT_FALSE(hash_table.mem_limit_exceeded());
   EXPECT_TRUE(!tracker.LimitExceeded());
 

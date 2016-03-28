@@ -19,6 +19,7 @@ import java.util.List;
 
 import com.cloudera.impala.catalog.Column;
 import com.cloudera.impala.catalog.ColumnStats;
+import com.cloudera.impala.catalog.KuduColumn;
 import com.cloudera.impala.catalog.Type;
 import com.cloudera.impala.thrift.TSlotDescriptor;
 import com.google.common.base.Joiner;
@@ -127,6 +128,12 @@ public class SlotDescriptor {
     path_ = path;
     type_ = path_.destType();
     label_ = Joiner.on(".").join(path.getRawPath());
+
+    // Set nullability, if this refers to a KuduColumn.
+    if (path_.destColumn() instanceof KuduColumn) {
+      KuduColumn kuduColumn = (KuduColumn)path_.destColumn();
+      isNullable_ = kuduColumn.isNullable();
+    }
   }
 
   public Path getPath() { return path_; }
@@ -212,11 +219,12 @@ public class SlotDescriptor {
   }
 
   public TSlotDescriptor toThrift() {
+    Preconditions.checkState(isMaterialized_);
     List<Integer> materializedPath = getMaterializedPath();
     TSlotDescriptor result = new TSlotDescriptor(
         id_.asInt(), parent_.getId().asInt(), type_.toThrift(),
         materializedPath, byteOffset_, nullIndicatorByte_, nullIndicatorBit_,
-        slotIdx_, isMaterialized_);
+        slotIdx_);
     if (itemTupleDesc_ != null) {
       // Check for recursive or otherwise invalid item tuple descriptors. Since we assign
       // tuple ids globally in increasing order, the id of an item tuple descriptor must
@@ -240,6 +248,7 @@ public class SlotDescriptor {
         .add("materialized", isMaterialized_)
         .add("byteSize", byteSize_)
         .add("byteOffset", byteOffset_)
+        .add("nullable", isNullable_)
         .add("nullIndicatorByte", nullIndicatorByte_)
         .add("nullIndicatorBit", nullIndicatorBit_)
         .add("slotIdx", slotIdx_)

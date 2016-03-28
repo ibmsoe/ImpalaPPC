@@ -73,8 +73,9 @@ class RuntimeState;
 ///   list of unpinned blocks. Unpinned blocks are only written when the number of free
 ///   blocks falls below the 'block_write_threshold'.
 ///  Delete(): Invoked to deallocate a block. The buffer associated with the block is
-///   immediately released and its on-disk location (if any) reused.
-//
+///   immediately released and its on-disk location (if any) reused. All blocks must be
+///   deleted before the block manager is torn down.
+///
 /// The block manager is thread-safe with the following caveat: A single block cannot be
 /// used simultaneously by multiple clients in any capacity.
 /// However, the block manager client is not thread-safe. That is, the block manager
@@ -141,7 +142,9 @@ class BufferedBlockMgr {
     /// memory pressure, this block will be pinned using the buffer from 'release_block'.
     /// If 'unpin' is true, 'release_block' will be unpinned (regardless of whether or not
     /// the buffer was used for this block). If 'unpin' is false, 'release_block' is
-    /// deleted. 'release_block' must be pinned.
+    /// deleted. 'release_block' must be pinned. If an error occurs and 'unpin' was false,
+    /// 'release_block' is always deleted. If 'unpin' was true and an error occurs,
+    /// 'release_block' may be left pinned or unpinned.
     Status Pin(bool* pinned, Block* release_block = NULL, bool unpin = true);
 
     /// Unpins a block by adding it to the list of unpinned blocks maintained by the block
@@ -314,10 +317,16 @@ class BufferedBlockMgr {
   /// The min reserved buffers is often independent of data size and we still want
   /// to run small queries with very small limits.
   /// Buffers used by this client are reflected in tracker.
+  /// tolerates_oversubscription determines how oversubscription is handled. If true,
+  /// failure to allocate a reserved buffer is not an error. If false, failure to
+  /// allocate a reserved buffer is a MEM_LIMIT_EXCEEDED error.
+  /// debug_info is a string that will be printed in debug messages and errors to
+  /// identify the client.
   /// TODO: The fact that we allow oversubscription is problematic.
-  /// as the code expects the reservations to always be granted (currently not the case).
-  Status RegisterClient(int num_reserved_buffers, MemTracker* tracker,
-      RuntimeState* state, Client** client);
+  /// as some code expects the reservations to always be granted (currently not the case).
+  Status RegisterClient(const std::string& debug_info, int num_reserved_buffers,
+      bool tolerates_oversubscription, MemTracker* tracker, RuntimeState* state,
+      Client** client);
 
   /// Clears all reservations for this client.
   void ClearReservations(Client* client);
@@ -427,10 +436,12 @@ class BufferedBlockMgr {
   Status InitTmpFiles();
 
   /// PinBlock(), UnpinBlock(), DeleteBlock() perform the actual work of Block::Pin(),
-  /// Unpin() and Delete(). Must be called with the lock_ taken.
+  /// Unpin() and Delete(). DeleteBlock() must be called without the lock_ taken and
+  /// DeleteBlockLocked() must be called with the lock_ taken.
   Status PinBlock(Block* block, bool* pinned, Block* src, bool unpin);
   Status UnpinBlock(Block* block);
   void DeleteBlock(Block* block);
+  void DeleteBlockLocked(const boost::unique_lock<boost::mutex>& lock, Block* block);
 
   /// If the 'block' is NULL, checks if cancelled and returns. Otherwise, depending on
   /// 'unpin' calls either  DeleteBlock() or UnpinBlock(), which both first check for
@@ -466,8 +477,7 @@ class BufferedBlockMgr {
   ///   2. Using a buffer from the free list (which is populated by moving blocks from
   ///      the unpinned list by writing them out).
   /// Must be called with the lock_ already taken. This function can block.
-  Status FindBuffer(boost::unique_lock<boost::mutex>& lock,
-      BufferDescriptor** buffer);
+  Status FindBuffer(boost::unique_lock<boost::mutex>& lock, BufferDescriptor** buffer);
 
   /// Writes unpinned blocks via DiskIoMgr until one of the following is true:
   ///   1. The number of outstanding writes >= (block_write_threshold_ - num free buffers)
@@ -507,7 +517,7 @@ class BufferedBlockMgr {
   const int64_t max_block_size_;
 
   /// Unpinned blocks are written when the number of free buffers is below this threshold.
-  /// Equal to the number of disks.
+  /// Equal to two times the number of disks.
   const int block_write_threshold_;
 
   /// If true, spilling is disabled. The client calls will fail if there is not enough
@@ -546,6 +556,9 @@ class BufferedBlockMgr {
 
   /// Signal availability of free buffers.
   boost::condition_variable buffer_available_cv_;
+
+  /// All used or unused blocks allocated by the BufferedBlockMgr.
+  vector<Block*> all_blocks_;
 
   /// List of blocks is_pinned_ = false AND are not on DiskIoMgr's write queue.
   /// Blocks are added to and removed from the back of the list. (i.e. in LIFO order).

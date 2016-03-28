@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gtest/gtest.h>
-
+#include "testutil/gtest-util.h"
 #include "runtime/collection-value.h"
 #include "runtime/collection-value-builder.h"
-#include "runtime/raw-value.h"
+#include "runtime/raw-value.inline.h"
 #include "runtime/row-batch.h"
 #include "runtime/tuple-row.h"
 #include "util/stopwatch.h"
@@ -52,7 +51,7 @@ class RowBatchSerializeTest : public testing::Test {
     if (print_batches) cout << PrintBatch(batch) << endl;
 
     TRowBatch trow_batch;
-    EXPECT_TRUE(batch->Serialize(&trow_batch, full_dedup).ok());
+    EXPECT_OK(batch->Serialize(&trow_batch, full_dedup));
 
     RowBatch deserialized_batch(row_desc, trow_batch, tracker_.get());
     if (print_batches) cout << PrintBatch(&deserialized_batch) << endl;
@@ -85,7 +84,6 @@ class RowBatchSerializeTest : public testing::Test {
 
     for (int slot_idx = 0; slot_idx < tuple_desc.slots().size(); ++slot_idx) {
       SlotDescriptor* slot_desc = tuple_desc.slots()[slot_idx];
-      if (!slot_desc->is_materialized()) continue;
 
       if (tuple->IsNull(slot_desc->null_indicator_offset())) {
         EXPECT_TRUE(deserialized_tuple->IsNull(slot_desc->null_indicator_offset()));
@@ -162,13 +160,13 @@ class RowBatchSerializeTest : public testing::Test {
         CollectionValue cv;
         CollectionValueBuilder builder(&cv, *item_desc, pool, array_len);
         Tuple* tuple_mem;
-        int n = builder.GetFreeMemory(&tuple_mem);
-        DCHECK_GE(n, array_len);
+        int n;
+        EXPECT_OK(builder.GetFreeMemory(&tuple_mem, &n));
+        ASSERT_GE(n, array_len);
         memset(tuple_mem, 0, item_desc->byte_size() * array_len);
         for (int i = 0; i < array_len; ++i) {
           for (int slot_idx = 0; slot_idx < item_desc->slots().size(); ++slot_idx) {
             SlotDescriptor* item_slot_desc = item_desc->slots()[slot_idx];
-            if (!item_slot_desc->is_materialized()) continue;
             WriteValue(tuple_mem, *item_slot_desc, pool);
           }
           tuple_mem += item_desc->byte_size();
@@ -179,7 +177,7 @@ class RowBatchSerializeTest : public testing::Test {
         break;
       }
       default:
-        DCHECK(false) << "NYI: " << slot_desc.type().DebugString();
+        ASSERT_TRUE(false) << "NYI: " << slot_desc.type().DebugString();
     }
   }
 
@@ -191,9 +189,7 @@ class RowBatchSerializeTest : public testing::Test {
     memset(tuple_mem, 0, len);
 
     for (int i = 0; i < NUM_ROWS; ++i) {
-      int idx = batch->AddRow();
-      DCHECK(idx != RowBatch::INVALID_ROW_INDEX);
-      TupleRow* row = batch->GetRow(idx);
+      TupleRow* row = batch->GetRow(batch->AddRow());
 
       for (int tuple_idx = 0; tuple_idx < row_desc.tuple_descriptors().size(); ++tuple_idx) {
         TupleDescriptor* tuple_desc = row_desc.tuple_descriptors()[tuple_idx];
@@ -203,8 +199,6 @@ class RowBatchSerializeTest : public testing::Test {
 
         for (int slot_idx = 0; slot_idx < tuple_desc->slots().size(); ++slot_idx) {
           SlotDescriptor* slot_desc = tuple_desc->slots()[slot_idx];
-          if (!slot_desc->is_materialized()) continue;
-
           if (rand() % 100 < NULL_VALUE_PERCENT) {
             tuple->SetNull(slot_desc->null_indicator_offset());
           } else {
@@ -234,7 +228,6 @@ class RowBatchSerializeTest : public testing::Test {
       Tuple* tuple = reinterpret_cast<Tuple*>(tuple_mem);
       for (int slot_idx = 0; slot_idx < tuple_desc.slots().size(); ++slot_idx) {
         SlotDescriptor* slot_desc = tuple_desc.slots()[slot_idx];
-        if (!slot_desc->is_materialized()) continue;
         if (null_value_percent > 0 && rand() % 100 < null_value_percent) {
           tuple->SetNull(slot_desc->null_indicator_offset());
         } else {
@@ -252,15 +245,15 @@ class RowBatchSerializeTest : public testing::Test {
   void AddTuplesToRowBatch(int num_rows, const vector<vector<Tuple*> >& tuples,
       const vector<int>& repeats, RowBatch* batch) {
     int tuples_per_row = batch->row_desc().tuple_descriptors().size();
-    DCHECK_EQ(tuples_per_row, tuples.size());
-    DCHECK_EQ(tuples_per_row, repeats.size());
+    ASSERT_EQ(tuples_per_row, tuples.size());
+    ASSERT_EQ(tuples_per_row, repeats.size());
     vector<int> next_tuple(tuples_per_row, 0);
     for (int i = 0; i < num_rows; ++i) {
       int idx = batch->AddRow();
       TupleRow* row = batch->GetRow(idx);
       for (int tuple_idx = 0; tuple_idx < tuples_per_row; ++tuple_idx) {
         int curr_tuple = next_tuple[tuple_idx];
-        DCHECK(tuples[tuple_idx].size() > 0);
+        ASSERT_GT(tuples[tuple_idx].size(), 0);
         row->SetTuple(tuple_idx, tuples[tuple_idx][curr_tuple]);
         if ((i + 1) % repeats[tuple_idx] == 0) {
           next_tuple[tuple_idx] = (curr_tuple + 1) % tuples[tuple_idx].size();
@@ -299,7 +292,7 @@ TEST_F(RowBatchSerializeTest, Basic) {
   vector<bool> nullable_tuples(1, false);
   vector<TTupleId> tuple_id(1, (TTupleId) 0);
   RowDescriptor row_desc(*desc_tbl, tuple_id, nullable_tuples);
-  DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
+  ASSERT_EQ(row_desc.tuple_descriptors().size(), 1);
 
   RowBatch* batch = CreateRowBatch(row_desc);
   TestRowBatch(row_desc, batch, true);
@@ -314,7 +307,7 @@ TEST_F(RowBatchSerializeTest, String) {
   vector<bool> nullable_tuples(1, false);
   vector<TTupleId> tuple_id(1, (TTupleId) 0);
   RowDescriptor row_desc(*desc_tbl, tuple_id, nullable_tuples);
-  DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
+  ASSERT_EQ(row_desc.tuple_descriptors().size(), 1);
 
   RowBatch* batch = CreateRowBatch(row_desc);
   TestRowBatch(row_desc, batch, true);
@@ -333,7 +326,7 @@ TEST_F(RowBatchSerializeTest, BasicArray) {
   vector<bool> nullable_tuples(1, false);
   vector<TTupleId> tuple_id(1, (TTupleId) 0);
   RowDescriptor row_desc(*desc_tbl, tuple_id, nullable_tuples);
-  DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
+  ASSERT_EQ(row_desc.tuple_descriptors().size(), 1);
 
   RowBatch* batch = CreateRowBatch(row_desc);
   TestRowBatch(row_desc, batch, true);
@@ -361,7 +354,7 @@ TEST_F(RowBatchSerializeTest, StringArray) {
   vector<bool> nullable_tuples(1, false);
   vector<TTupleId> tuple_id(1, (TTupleId) 0);
   RowDescriptor row_desc(*desc_tbl, tuple_id, nullable_tuples);
-  DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
+  ASSERT_EQ(row_desc.tuple_descriptors().size(), 1);
 
   RowBatch* batch = CreateRowBatch(row_desc);
   TestRowBatch(row_desc, batch, true);
@@ -402,7 +395,7 @@ TEST_F(RowBatchSerializeTest, NestedArrays) {
   vector<bool> nullable_tuples(1, false);
   vector<TTupleId> tuple_id(1, (TTupleId) 0);
   RowDescriptor row_desc(*desc_tbl, tuple_id, nullable_tuples);
-  DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
+  ASSERT_EQ(row_desc.tuple_descriptors().size(), 1);
 
   RowBatch* batch = CreateRowBatch(row_desc);
   TestRowBatch(row_desc, batch, true);
@@ -429,7 +422,7 @@ void RowBatchSerializeTest::TestDupCorrectness(bool full_dedup) {
   tuple_id.push_back((TTupleId) 0);
   tuple_id.push_back((TTupleId) 1);
   RowDescriptor row_desc(*desc_tbl, tuple_id, nullable_tuples);
-  DCHECK_EQ(row_desc.tuple_descriptors().size(), 2);
+  ASSERT_EQ(row_desc.tuple_descriptors().size(), 2);
 
   int num_rows = 1000;
   int distinct_int_tuples = 100;
@@ -478,7 +471,7 @@ void RowBatchSerializeTest::TestDupRemoval(bool full_dedup) {
   CreateTuples(tuple_desc, batch->tuple_data_pool(), num_distinct_tuples, 0, 10, &tuples);
   AddTuplesToRowBatch(num_rows, tuples, repeats, batch);
   TRowBatch trow_batch;
-  EXPECT_TRUE(batch->Serialize(&trow_batch, full_dedup).ok());
+  EXPECT_OK(batch->Serialize(&trow_batch, full_dedup));
   // Serialized data should only have one copy of each tuple.
   int64_t total_byte_size = 0; // Total size without duplication
   for (int i = 0; i < tuples.size(); ++i) {
@@ -615,7 +608,7 @@ TEST_F(RowBatchSerializeTest, DedupPathologicalFull) {
   EXPECT_TRUE(UseFullDedup(batch));
   LOG(INFO) << "Serializing row batch";
   TRowBatch trow_batch;
-  EXPECT_TRUE(batch->Serialize(&trow_batch).ok());
+  EXPECT_OK(batch->Serialize(&trow_batch));
   LOG(INFO) << "Serialized batch size: " << trow_batch.tuple_data.size();
   LOG(INFO) << "Serialized batch uncompressed size: " << trow_batch.uncompressed_size;
   LOG(INFO) << "Serialized batch expected size: " << total_byte_size;

@@ -21,6 +21,7 @@
 #include "gen-cpp/Exprs_types.h"
 #include "runtime/collection-value.h"
 #include "runtime/runtime-state.h"
+#include "runtime/string-value.inline.h"
 
 #include "common/names.h"
 
@@ -53,11 +54,11 @@ SlotRef::SlotRef(const SlotDescriptor* desc, const ColumnType& type)
     // slot_/null_indicator_offset_ are set in Prepare()
 }
 
-SlotRef::SlotRef(const ColumnType& type, int offset)
+  SlotRef::SlotRef(const ColumnType& type, int offset, const bool nullable /* = false */)
   : Expr(type, true),
     tuple_idx_(0),
     slot_offset_(offset),
-    null_indicator_offset_(0, -1),
+    null_indicator_offset_(0, nullable ? offset : -1),
     slot_id_(-1) {
 }
 
@@ -72,11 +73,6 @@ Status SlotRef::Prepare(RuntimeState* state, const RowDescriptor& row_desc,
     stringstream error;
     error << "couldn't resolve slot descriptor " << slot_id_;
     LOG(INFO) << error.str();
-    return Status(error.str());
-  }
-  if (!slot_desc->is_materialized()) {
-    stringstream error;
-    error << "reference to non-materialized slot " << slot_id_;
     return Status(error.str());
   }
   tuple_idx_ = row_desc.GetTupleIdx(slot_desc->parent()->id());

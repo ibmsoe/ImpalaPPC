@@ -58,9 +58,18 @@ class RuntimeState;
 /// array's item, and path [0,1] would refer to the position element, which is the item
 /// count of the array.
 ///
-/// Likewise, maps are represented as having three fields: the key element, the value
-/// element, and the artifical position element.
+/// Maps are also represented as having two fields, the key and the value elements (maps
+/// do not have a position element).
 typedef std::vector<int> SchemaPath;
+class SchemaPathConstants {
+ public:
+  static const int ARRAY_ITEM = 0;
+  static const int ARRAY_POS = 1;
+  static const int MAP_KEY = 0;
+  static const int MAP_VALUE = 1;
+ private:
+  DISALLOW_COPY_AND_ASSIGN(SchemaPathConstants);
+};
 
 struct LlvmTupleStruct {
   llvm::StructType* tuple_struct;
@@ -109,7 +118,6 @@ class SlotDescriptor {
   const NullIndicatorOffset& null_indicator_offset() const {
     return null_indicator_offset_;
   }
-  bool is_materialized() const { return is_materialized_; }
   bool is_nullable() const { return null_indicator_offset_.bit_mask != 0; }
   int slot_size() const { return slot_size_; }
 
@@ -124,12 +132,12 @@ class SlotDescriptor {
   std::string DebugString() const;
 
   /// Codegen for: bool IsNull(Tuple* tuple)
-  /// The codegen function is cached.
-  llvm::Function* CodegenIsNull(LlvmCodeGen*, llvm::StructType* tuple);
+  /// The codegen'd IR function is cached.
+  llvm::Function* GetIsNullFn(LlvmCodeGen*) const;
 
-  /// Codegen for: void SetNull(Tuple* tuple) / SetNotNull
-  /// The codegen function is cached.
-  llvm::Function* CodegenUpdateNull(LlvmCodeGen*, llvm::StructType* tuple, bool set_null);
+  /// Codegen for: void SetNull(Tuple* tuple) / void SetNotNull(Tuple* tuple)
+  /// The codegen'd IR function is cached.
+  llvm::Function* GetUpdateNullFn(LlvmCodeGen*, bool set_null) const;
 
  private:
   friend class DescriptorTbl;
@@ -157,12 +165,10 @@ class SlotDescriptor {
   /// leading null bytes.
   int field_idx_;
 
-  const bool is_materialized_;
-
   /// Cached codegen'd functions
-  llvm::Function* is_null_fn_;
-  llvm::Function* set_not_null_fn_;
-  llvm::Function* set_null_fn_;
+  mutable llvm::Function* is_null_fn_;
+  mutable llvm::Function* set_not_null_fn_;
+  mutable llvm::Function* set_null_fn_;
 
   /// collection_item_descriptor should be non-NULL iff this is a collection slot
   SlotDescriptor(const TSlotDescriptor& tdesc, const TupleDescriptor* parent,
@@ -335,6 +341,24 @@ class DataSourceTableDescriptor : public TableDescriptor {
   virtual std::string DebugString() const;
 };
 
+// Descriptor for a KuduTable
+class KuduTableDescriptor : public TableDescriptor {
+ public:
+  explicit KuduTableDescriptor(const TTableDescriptor& tdesc);
+  virtual std::string DebugString() const;
+  const std::string table_name() const { return table_name_; }
+  const std::vector<std::string>& key_columns() const { return key_columns_; }
+  const std::vector<std::string>& kudu_master_addresses() const {
+    return master_addresses_;
+  }
+
+ private:
+  // native name of Kudu table
+  std::string table_name_;
+  std::vector<std::string> key_columns_;
+  std::vector<std::string> master_addresses_;
+};
+
 class TupleDescriptor {
  public:
   int byte_size() const { return byte_size_; }
@@ -366,7 +390,7 @@ class TupleDescriptor {
   ///   int64_t  count_val;
   /// };
   /// The resulting struct definition is cached.
-  llvm::StructType* GenerateLlvmStruct(LlvmCodeGen* codegen);
+  llvm::StructType* GetLlvmStruct(LlvmCodeGen* codegen) const;
 
  protected:
   friend class DescriptorTbl;
@@ -375,7 +399,6 @@ class TupleDescriptor {
   TableDescriptor* table_desc_;
   const int byte_size_;
   const int num_null_bytes_;
-  int num_materialized_slots_;
 
   /// Contains all slots.
   std::vector<SlotDescriptor*> slots_;
@@ -395,7 +418,8 @@ class TupleDescriptor {
   /// collection, empty otherwise.
   SchemaPath tuple_path_;
 
-  llvm::StructType* llvm_struct_; /// cache for the llvm struct type for this tuple desc
+  /// Cached codegen'd struct type for this tuple desc
+  mutable llvm::StructType* llvm_struct_;
 
   TupleDescriptor(const TTupleDescriptor& tdesc);
   void AddSlot(SlotDescriptor* slot);

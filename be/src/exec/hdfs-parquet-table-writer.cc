@@ -18,7 +18,6 @@
 #include "exprs/expr.h"
 #include "exprs/expr-context.h"
 #include "runtime/decimal-value.h"
-#include "runtime/raw-value.h"
 #include "runtime/row-batch.h"
 #include "runtime/runtime-state.h"
 #include "runtime/string-value.inline.h"
@@ -50,12 +49,7 @@ using namespace apache::thrift;
 // the exact on file size.
 // The current buffered pages (one for each column) can have a very poor estimate.
 // To adjust for this, we aim for a slightly smaller file size than the ideal.
-
-// The maximum entries in the dictionary before giving up and switching to
-// plain encoding.
-// TODO: more complicated heuristic?
-static const int MAX_DICTIONARY_ENTRIES = (1 << 16) - 1;
-
+//
 // Class that encapsulates all the state for writing a single column.  This contains
 // all the buffered pages as well as the metadata (e.g. byte sizes, num values, etc).
 // This is intended to be created once per writer per column and reused across
@@ -755,7 +749,9 @@ Status HdfsParquetTableWriter::CreateSchema() {
           ParquetPlainEncoder::DecimalSize(output_expr_ctxs_[i]->root()->type()));
       node.__set_scale(output_expr_ctxs_[i]->root()->type().scale);
       node.__set_precision(output_expr_ctxs_[i]->root()->type().precision);
-    } else if (type.type == TYPE_VARCHAR || type.type == TYPE_CHAR) {
+    } else if (type.type == TYPE_VARCHAR || type.type == TYPE_CHAR ||
+        (type.type == TYPE_STRING &&
+         state_->query_options().parquet_annotate_strings_utf8)) {
       node.__set_converted_type(ConvertedType::UTF8);
     }
   }
@@ -988,4 +984,3 @@ Status HdfsParquetTableWriter::WriteFileFooter() {
   RETURN_IF_ERROR(Write(PARQUET_VERSION_NUMBER, sizeof(PARQUET_VERSION_NUMBER)));
   return Status::OK();
 }
-

@@ -15,8 +15,8 @@
 from copy import deepcopy
 from itertools import ifilter
 
-from tests.comparison.common import ValExpr
-from tests.comparison.types import (
+from common import ValExpr
+from db_types import (
     Boolean,
     Char,
     DataType,
@@ -487,9 +487,10 @@ for comparator in ['GreaterThanOrEquals', 'LessThanOrEquals']:
       [Boolean, Int, Decimal],
       [Boolean, Int, Int],
       [Boolean, Timestamp, Timestamp]])
-for comparator in ['Equals', 'NotEquals']:
+for comparator in ['Equals', 'NotEquals', 'IsNotDistinctFrom', 'IsNotDistinctFromOp',
+    'IsDistinctFrom']:
   # Avoid equality comparison on FLOATs
-  create_func(comparator, signatures=[
+  func = create_func(comparator, signatures=[
       [Boolean, Boolean, Boolean],
       [Boolean, Char, Char],
       [Boolean, Decimal, Decimal],

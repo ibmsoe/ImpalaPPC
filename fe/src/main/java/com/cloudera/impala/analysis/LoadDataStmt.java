@@ -30,6 +30,7 @@ import com.cloudera.impala.catalog.HdfsTable;
 import com.cloudera.impala.catalog.Table;
 import com.cloudera.impala.common.AnalysisException;
 import com.cloudera.impala.common.FileSystemUtil;
+import com.cloudera.impala.thrift.ImpalaInternalServiceConstants;
 import com.cloudera.impala.thrift.TLoadDataReq;
 import com.cloudera.impala.thrift.TTableName;
 import com.cloudera.impala.util.TAccessLevelUtil;
@@ -151,9 +152,9 @@ public class LoadDataStmt extends StatementBase {
           throw new AnalysisException(String.format(
               "INPATH location '%s' contains no visible files.", sourceDataPath_));
         }
-        if (FileSystemUtil.containsSubdirectory(source)) {
+        if (FileSystemUtil.containsVisibleSubdirectory(source)) {
           throw new AnalysisException(String.format(
-              "INPATH location '%s' cannot contain subdirectories.", sourceDataPath_));
+              "INPATH location '%s' cannot contain non-hidden subdirectories.", sourceDataPath_));
         }
         if (!checker.getPermissions(fs, source).checkPermissions(
             FsAction.READ_WRITE)) {
@@ -196,7 +197,8 @@ public class LoadDataStmt extends StatementBase {
         }
       } else {
         // "default" partition
-        partition = hdfsTable.getPartitions().get(0);
+        partition = hdfsTable.getPartitionMap().get(
+            ImpalaInternalServiceConstants.DEFAULT_PARTITION_ID);
         location = hdfsTable.getLocation();
         if (!hdfsTable.hasWriteAccess()) {
           throw new AnalysisException(noWriteAccessErrorMsg + hdfsTable.getLocation());

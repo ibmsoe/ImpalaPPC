@@ -14,15 +14,19 @@
 
 #include "exec/old-hash-table.inline.h"
 
+#include <functional>
+#include <numeric>
+
 #include "codegen/codegen-anyval.h"
 #include "codegen/llvm-codegen.h"
 #include "exprs/expr.h"
 #include "exprs/expr-context.h"
 #include "exprs/slot-ref.h"
 #include "runtime/mem-tracker.h"
-#include "runtime/raw-value.h"
+#include "runtime/raw-value.inline.h"
 #include "runtime/runtime-state.h"
 #include "runtime/string-value.inline.h"
+#include "util/bloom-filter.h"
 #include "util/debug-util.h"
 #include "util/error-util.h"
 #include "util/impalad-metrics.h"
@@ -51,16 +55,23 @@ static int64_t NULL_VALUE[] = { HashUtil::FNV_SEED, HashUtil::FNV_SEED,
                                 HashUtil::FNV_SEED, HashUtil::FNV_SEED,
                                 HashUtil::FNV_SEED, HashUtil::FNV_SEED };
 
-OldHashTable::OldHashTable(RuntimeState* state, const vector<ExprContext*>& build_expr_ctxs,
-    const vector<ExprContext*>& probe_expr_ctxs, int num_build_tuples, bool stores_nulls,
-    bool finds_nulls, int32_t initial_seed, MemTracker* mem_tracker, bool stores_tuples,
+OldHashTable::OldHashTable(RuntimeState* state,
+    const vector<ExprContext*>& build_expr_ctxs,
+    const vector<ExprContext*>& probe_expr_ctxs,
+    const vector<ExprContext*>& filter_expr_ctxs, int num_build_tuples, bool stores_nulls,
+    const vector<bool>& finds_nulls, int32_t initial_seed, MemTracker* mem_tracker,
+    const vector<RuntimeFilter*>& runtime_filters, bool stores_tuples,
     int64_t num_buckets)
   : state_(state),
     build_expr_ctxs_(build_expr_ctxs),
     probe_expr_ctxs_(probe_expr_ctxs),
+    filter_expr_ctxs_(filter_expr_ctxs),
+    filters_(runtime_filters),
     num_build_tuples_(num_build_tuples),
     stores_nulls_(stores_nulls),
     finds_nulls_(finds_nulls),
+    finds_some_nulls_(std::accumulate(
+        finds_nulls_.begin(), finds_nulls_.end(), false, std::logical_or<bool>())),
     stores_tuples_(stores_tuples),
     initial_seed_(initial_seed),
     num_filled_buckets_(0),
@@ -73,7 +84,7 @@ OldHashTable::OldHashTable(RuntimeState* state, const vector<ExprContext*>& buil
     mem_limit_exceeded_(false) {
   DCHECK(mem_tracker != NULL);
   DCHECK_EQ(build_expr_ctxs_.size(), probe_expr_ctxs_.size());
-
+  DCHECK_EQ(build_expr_ctxs_.size(), finds_nulls_.size());
   DCHECK_EQ((num_buckets & (num_buckets-1)), 0) << "num_buckets must be a power of 2";
   buckets_.resize(num_buckets);
   num_buckets_ = num_buckets;
@@ -125,41 +136,32 @@ bool OldHashTable::EvalRow(
   return has_null;
 }
 
-void OldHashTable::AddBitmapFilters() {
-  DCHECK_EQ(build_expr_ctxs_.size(), probe_expr_ctxs_.size());
-  vector<pair<SlotId, Bitmap*> > bitmaps;
-  bitmaps.resize(probe_expr_ctxs_.size());
-  for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
-    if (probe_expr_ctxs_[i]->root()->is_slotref()) {
-      bitmaps[i].first =
-          reinterpret_cast<SlotRef*>(probe_expr_ctxs_[i]->root())->slot_id();
-      bitmaps[i].second = new Bitmap(state_->slot_filter_bitmap_size());
-    } else {
-      bitmaps[i].second = NULL;
-    }
+void OldHashTable::AddBloomFilters() {
+  vector<BloomFilter*> bloom_filters;
+  bloom_filters.resize(filters_.size());
+  for (int i = 0; i < filters_.size(); ++i) {
+    bloom_filters[i] = state_->filter_bank()->AllocateScratchBloomFilter();
   }
 
-  // Walk the build table and generate a bitmap for each probe side slot.
   OldHashTable::Iterator iter = Begin();
   while (iter != End()) {
     TupleRow* row = iter.GetRow();
-    for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
-      if (bitmaps[i].second == NULL) continue;
-      void* e = build_expr_ctxs_[i]->GetValue(row);
+    for (int i = 0; i < filters_.size(); ++i) {
+      if (bloom_filters[i] == NULL) continue;
+      void* e = filter_expr_ctxs_[i]->GetValue(row);
       uint32_t h =
-          RawValue::GetHashValue(e, build_expr_ctxs_[i]->root()->type(), initial_seed_);
-      bitmaps[i].second->Set<true>(h, true);
+          RawValue::GetHashValue(e, build_expr_ctxs_[i]->root()->type(),
+              RuntimeFilterBank::DefaultHashSeed());
+      bloom_filters[i]->Insert(h);
     }
     iter.Next<false>();
   }
 
-  // Add all the bitmaps to the runtime state.
-  bool acquired_ownership = false;
-  for (int i = 0; i < bitmaps.size(); ++i) {
-    if (bitmaps[i].second == NULL) continue;
-    state_->AddBitmapFilter(bitmaps[i].first, bitmaps[i].second, &acquired_ownership);
-    VLOG(2) << "Bitmap filter added on slot: " << bitmaps[i].first;
-    if (!acquired_ownership) delete bitmaps[i].second;
+  // Update all the local filters in the filter bank.
+  for (int i = 0; i < filters_.size(); ++i) {
+    if (bloom_filters[i] == NULL) continue;
+    state_->filter_bank()->UpdateFilterFromLocal(filters_[i]->filter_desc().filter_id,
+        bloom_filters[i]);
   }
 }
 
@@ -508,7 +510,7 @@ bool OldHashTable::Equals(TupleRow* build_row) {
   for (int i = 0; i < build_expr_ctxs_.size(); ++i) {
     void* val = build_expr_ctxs_[i]->GetValue(build_row);
     if (val == NULL) {
-      if (!stores_nulls_) return false;
+      if (!(stores_nulls_ && finds_nulls_[i])) return false;
       if (!expr_value_null_bits_[i]) return false;
       continue;
     } else {
@@ -630,7 +632,7 @@ Function* OldHashTable::CodegenEquals(RuntimeState* state) {
       // the case where the hash table does not store nulls, this is always false.
       Value* probe_is_null = codegen->false_value();
       uint8_t* null_byte_loc = &expr_value_null_bits_[i];
-      if (stores_nulls_) {
+      if (stores_nulls_ && finds_nulls_[i]) {
         Value* llvm_null_byte_loc =
             codegen->CastPtrToLlvmPtr(codegen->ptr_type(), null_byte_loc);
         Value* null_byte = builder.CreateLoad(llvm_null_byte_loc);

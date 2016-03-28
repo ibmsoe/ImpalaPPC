@@ -22,9 +22,8 @@ from tests.common.test_result_verifier import *
 from subprocess import call
 from tests.common.test_vector import *
 from tests.common.test_dimensions import ALL_NODES_ONLY
-from tests.common.impala_cluster import ImpalaCluster
 from tests.common.impala_test_suite import *
-from tests.common.skip import SkipIfS3, SkipIfIsilon, SkipIfLocal
+from tests.common.skip import SkipIf, SkipIfS3, SkipIfIsilon, SkipIfLocal, SkipIfOldAggsJoins
 from tests.util.filesystem_utils import WAREHOUSE, IS_LOCAL
 
 # Validates DDL statements (create, drop)
@@ -214,9 +213,25 @@ class TestDdlStatements(ImpalaTestSuite):
   @pytest.mark.execute_serially
   def test_create_table(self, vector):
     vector.get_value('exec_option')['abort_on_error'] = False
-    self._create_db('ddl_test_db', sync=True)
-    self.run_test_case('QueryTest/create', vector, use_db='ddl_test_db',
-        multiple_impalad=self._use_multiple_impalad(vector))
+    test_db_name = 'ddl_test_db'
+    self._create_db(test_db_name, sync=True)
+    try:
+      self.run_test_case('QueryTest/create', vector, use_db=test_db_name,
+          multiple_impalad=self._use_multiple_impalad(vector))
+    finally:
+      self.cleanup_db(test_db_name)
+
+  @SkipIfOldAggsJoins.nested_types
+  @pytest.mark.execute_serially
+  def test_create_table_nested_types(self, vector):
+    vector.get_value('exec_option')['abort_on_error'] = False
+    test_db_name = 'ddl_test_db'
+    self._create_db(test_db_name, sync=True)
+    try:
+      self.run_test_case('QueryTest/create-nested', vector, use_db=test_db_name,
+          multiple_impalad=self._use_multiple_impalad(vector))
+    finally:
+      self.cleanup_db(test_db_name)
 
   @SkipIfS3.hive
   @SkipIfIsilon.hive
@@ -253,6 +268,16 @@ class TestDdlStatements(ImpalaTestSuite):
     assert 'test_tbl' not in self.client.execute("show tables in test_db").data
     self.client.execute("invalidate metadata test_db.test_tbl")
     assert 'test_tbl' in self.client.execute("show tables in test_db").data
+
+  @SkipIf.kudu_not_supported
+  @SkipIfS3.insert
+  @pytest.mark.execute_serially
+  def test_create_kudu(self, vector):
+    self.expected_exceptions = 2
+    vector.get_value('exec_option')['abort_on_error'] = False
+    self._create_db('ddl_test_db', sync=True)
+    self.run_test_case('QueryTest/create_kudu', vector, use_db='ddl_test_db',
+        multiple_impalad=self._use_multiple_impalad(vector))
 
   @pytest.mark.execute_serially
   def test_sync_ddl_drop(self, vector):
@@ -370,13 +395,12 @@ class TestDdlStatements(ImpalaTestSuite):
     create_stmts = [create_ds_stmt, create_tbl_stmt]
     drop_stmts = [drop_tbl_stmt, drop_ds_stmt]
 
-    # Get the impalad to capture metrics
-    impala_cluster = ImpalaCluster()
-    impalad = impala_cluster.get_first_impalad()
+    # The ImpaladService is used to capture metrics
+    service = self.impalad_test_service
 
     # Initial metric values
-    class_cache_hits = impalad.service.get_metric_value(class_cache_hits_metric)
-    class_cache_misses = impalad.service.get_metric_value(class_cache_misses_metric)
+    class_cache_hits = service.get_metric_value(class_cache_hits_metric)
+    class_cache_misses = service.get_metric_value(class_cache_misses_metric)
     # Test with 1 node so we can check the metrics on only the coordinator
     vector.get_value('exec_option')['num_nodes'] = 1
     num_iterations = 2
@@ -386,8 +410,8 @@ class TestDdlStatements(ImpalaTestSuite):
     # Check class cache metrics. Shouldn't have any new cache hits, there should be
     # 2 cache misses for every iteration (jar is loaded by both the FE and BE).
     expected_cache_misses = class_cache_misses + (num_iterations * 2)
-    impalad.service.wait_for_metric_value(class_cache_hits_metric, class_cache_hits)
-    impalad.service.wait_for_metric_value(class_cache_misses_metric,
+    service.wait_for_metric_value(class_cache_hits_metric, class_cache_hits)
+    service.wait_for_metric_value(class_cache_misses_metric,
         expected_cache_misses)
 
     # Test with a table that caches the class
@@ -401,12 +425,12 @@ class TestDdlStatements(ImpalaTestSuite):
         select_stmt, 1)
 
     # Capture metric values and run again, should hit the cache.
-    class_cache_hits = impalad.service.get_metric_value(class_cache_hits_metric)
-    class_cache_misses = impalad.service.get_metric_value(class_cache_misses_metric)
+    class_cache_hits = service.get_metric_value(class_cache_hits_metric)
+    class_cache_misses = service.get_metric_value(class_cache_misses_metric)
     self.create_drop_ddl(vector, "data_src_test", create_stmts, drop_stmts,
         select_stmt, 1)
-    impalad.service.wait_for_metric_value(class_cache_hits_metric, class_cache_hits + 2)
-    impalad.service.wait_for_metric_value(class_cache_misses_metric, class_cache_misses)
+    service.wait_for_metric_value(class_cache_hits_metric, class_cache_hits + 2)
+    service.wait_for_metric_value(class_cache_misses_metric, class_cache_misses)
 
   def create_drop_ddl(self, vector, db_name, create_stmts, drop_stmts, select_stmt,
       num_iterations=3):

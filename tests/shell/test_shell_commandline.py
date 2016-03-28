@@ -21,10 +21,14 @@ import signal
 
 from impala_shell_results import get_shell_cmd_result
 from subprocess import Popen, PIPE, call
-from tests.common.impala_cluster import ImpalaCluster
+from tests.common.impala_service import ImpaladService
 from time import sleep
+from test_shell_common import assert_var_substitution
 
-SHELL_CMD = "%s/bin/impala-shell.sh" % os.environ['IMPALA_HOME']
+IMPALAD_HOST_PORT_LIST = pytest.config.option.impalad.split(',')
+assert len(IMPALAD_HOST_PORT_LIST) > 0, 'Must specify at least 1 impalad to target'
+IMPALAD = IMPALAD_HOST_PORT_LIST[0]
+SHELL_CMD = "%s/bin/impala-shell.sh -i %s" % (os.environ['IMPALA_HOME'], IMPALAD)
 DEFAULT_QUERY = 'select 1'
 TEST_DB = "tmp_shell"
 TEST_TBL = "tbl1"
@@ -287,15 +291,13 @@ class TestImpalaShell(object):
     # Execute the shell command async
     p = Popen(shlex.split(cmd), shell=False, stdout=PIPE, stderr=PIPE)
 
-    impala_cluster = ImpalaCluster()
-    impalad = impala_cluster.impalads[0].service
+    impalad_service = ImpaladService(IMPALAD.split(':')[0])
     # The last query in the test SQL script will sleep for 10 seconds, so sleep
     # here for 5 seconds and verify the number of in-flight queries is 1.
     sleep(5)
-    assert 1 == impalad.get_num_in_flight_queries()
+    assert 1 == impalad_service.get_num_in_flight_queries()
     assert get_shell_cmd_result(p).rc == 0
-    assert 0 == impalad.get_num_in_flight_queries()
-
+    assert 0 == impalad_service.get_num_in_flight_queries()
 
   @pytest.mark.execute_serially
   def test_cancellation(self):
@@ -344,24 +346,24 @@ class TestImpalaShell(object):
 
   @pytest.mark.execute_serially
   def test_config_file(self):
-      """Test the optional configuration file"""
-      # Positive tests
-      args = '--config_file=%s/good_impalarc' % QUERY_FILE_PATH
-      result = run_impala_shell_cmd(args)
-      assert 'Query: select 1' in  result.stderr
-      assert 'Invalidating Metadata' in result.stderr
-      # override option in config file through command line
-      args = '--config_file=%s/good_impalarc --query="select 2"' % QUERY_FILE_PATH
-      result = run_impala_shell_cmd(args)
-      assert 'Query: select 2' in result.stderr
+    """Test the optional configuration file"""
+    # Positive tests
+    args = '--config_file=%s/good_impalarc' % QUERY_FILE_PATH
+    result = run_impala_shell_cmd(args)
+    assert 'Query: select 1' in  result.stderr
+    assert 'Invalidating Metadata' in result.stderr
+    # override option in config file through command line
+    args = '--config_file=%s/good_impalarc --query="select 2"' % QUERY_FILE_PATH
+    result = run_impala_shell_cmd(args)
+    assert 'Query: select 2' in result.stderr
 
-      # Negative Tests
-      # specified config file does not exist
-      args = '--config_file=%s/does_not_exist' % QUERY_FILE_PATH
-      run_impala_shell_cmd(args, expect_success=False)
-      # bad formatting of config file
-      args = '--config_file=%s/bad_impalarc' % QUERY_FILE_PATH
-      run_impala_shell_cmd(args, expect_success=False)
+    # Negative Tests
+    # specified config file does not exist
+    args = '--config_file=%s/does_not_exist' % QUERY_FILE_PATH
+    run_impala_shell_cmd(args, expect_success=False)
+    # bad formatting of config file
+    args = '--config_file=%s/bad_impalarc' % QUERY_FILE_PATH
+    run_impala_shell_cmd(args, expect_success=False)
 
   @pytest.mark.execute_serially
   def test_execute_queries_from_stdin(self):
@@ -391,6 +393,27 @@ class TestImpalaShell(object):
 
     # TODO: Without an Impala daemon running LDAP authentication, we can't test if
     # --auth_creds_ok_in_clear works when correctly set.
+
+  @pytest.mark.execute_serially
+  def test_ldap_password_from_shell(self):
+    args = "-l --auth_creds_ok_in_clear --ldap_password_cmd='%s'"
+    result = run_impala_shell_cmd(args % 'cmddoesntexist', expect_success=False)
+    assert ("Error retrieving LDAP password (command was: 'cmddoesntexist', exception "
+            "was: '[Errno 2] No such file or directory')") in result.stderr
+    result = run_impala_shell_cmd(args % 'cat filedoesntexist', expect_success=False)
+    assert ("Error retrieving LDAP password (command was 'cat filedoesntexist', error "
+            "was: 'cat: filedoesntexist: No such file or directory')") in result.stderr
+
+    # TODO: Without an Impala daemon with LDAP authentication enabled, we can't test the
+    # positive case where the password is correct.
+
+  @pytest.mark.execute_serially
+  def test_var_substitution(self):
+    args = '--var=foo=123 --var=BAR=456 --delimited --output_delimiter=" " -c -f %s' \
+      % (os.path.join(QUERY_FILE_PATH, 'test_var_substitution.sql'))
+    result = run_impala_shell_cmd(args, expect_success=True)
+    assert_var_substitution(result)
+
 
 def run_impala_shell_cmd(shell_args, expect_success=True, stdin_input=None):
   """Runs the Impala shell on the commandline.

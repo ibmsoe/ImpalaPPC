@@ -21,6 +21,8 @@ typedef i32 TTupleId
 typedef i32 TSlotId
 typedef i32 TTableId
 
+// TODO: Consider moving unrelated enums to better locations.
+
 enum TPrimitiveType {
   INVALID_TYPE,
   NULL_TYPE,
@@ -105,6 +107,18 @@ enum TExplainLevel {
   VERBOSE
 }
 
+enum TRuntimeFilterMode {
+  // No filters are computed in the FE or the BE.
+  OFF,
+
+  // Only broadcast filters are computed in the BE, and are only published to the local
+  // fragment.
+  LOCAL,
+
+  // All fiters are computed in the BE, and are published globally.
+  GLOBAL
+}
+
 // A TNetworkAddress is the standard host, port representation of a
 // network address. The hostname field must be resolvable to an IPv4
 // address.
@@ -130,8 +144,8 @@ enum TFunctionBinaryType {
   // depending on the query option.
   BUILTIN,
 
-  // Hive UDFs, loaded from *.jar
-  HIVE,
+  // Java UDFs, loaded from *.jar
+  JAVA,
 
   // Native-interface, precompiled UDFs loaded from *.so
   NATIVE,
@@ -198,5 +212,7 @@ struct TFunction {
   // One of these should be set.
   9: optional TScalarFunction scalar_fn
   10: optional TAggregateFunction aggregate_fn
-}
 
+  // True for builtins or user-defined functions persisted by the catalog
+  11: optional bool is_persistent
+}

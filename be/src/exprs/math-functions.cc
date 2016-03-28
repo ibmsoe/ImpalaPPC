@@ -23,6 +23,7 @@
 #include "exprs/operators.h"
 #include "util/string-parser.h"
 #include "runtime/runtime-state.h"
+#include "runtime/string-value.inline.h"
 
 #include "common/names.h"
 
@@ -148,7 +149,7 @@ void MathFunctions::RandPrepare(
       DCHECK_EQ(ctx->GetArgType(0)->type, FunctionContext::TYPE_BIGINT);
       BigIntVal* seed_arg = static_cast<BigIntVal*>(ctx->GetConstantArg(0));
       if (seed_arg->is_null) {
-        seed = NULL;
+        *seed = 0;
       } else {
         *seed = seed_arg->val;
       }
@@ -172,6 +173,15 @@ DoubleVal MathFunctions::Rand(FunctionContext* ctx) {
 DoubleVal MathFunctions::RandSeed(FunctionContext* ctx, const BigIntVal& seed) {
   if (seed.is_null) return DoubleVal::null();
   return Rand(ctx);
+}
+
+void MathFunctions::RandClose(FunctionContext* ctx,
+    FunctionContext::FunctionStateScope scope) {
+  if (scope == FunctionContext::THREAD_LOCAL) {
+    uint8_t* seed = reinterpret_cast<uint8_t*>(
+        ctx->GetFunctionState(FunctionContext::THREAD_LOCAL));
+    ctx->Free(seed);
+  }
 }
 
 StringVal MathFunctions::Bin(FunctionContext* ctx, const BigIntVal& v) {
@@ -349,7 +359,7 @@ StringVal MathFunctions::DecimalToBase(FunctionContext* ctx, int64_t src_num,
 bool MathFunctions::DecimalInBaseToDecimal(int64_t src_num, int8_t src_base,
     int64_t* result) {
   uint64_t temp_num = abs(src_num);
-  int32_t place = 1;
+  int64_t place = 1;
   *result = 0;
   do {
     int32_t digit = temp_num % 10;
@@ -424,7 +434,7 @@ template <typename T> T MathFunctions::Negative(FunctionContext* ctx, const T& v
 template <>
 DecimalVal MathFunctions::Negative(FunctionContext* ctx, const DecimalVal& val) {
   if (val.is_null) return val;
-  int type_byte_size = Expr::GetConstant<int>(*ctx, Expr::RETURN_TYPE_SIZE);
+  int type_byte_size = Expr::GetConstantInt(*ctx, Expr::RETURN_TYPE_SIZE);
   switch (type_byte_size) {
     case 4:
       return DecimalVal(-val.val4);
@@ -510,7 +520,7 @@ template <bool ISLEAST> DecimalVal MathFunctions::LeastGreatest(
   DCHECK_GT(num_args, 0);
   if (args[0].is_null) return DecimalVal::null();
   DecimalVal result_val = args[0];
-  int type_byte_size = Expr::GetConstant<int>(*ctx, Expr::RETURN_TYPE_SIZE);
+  int type_byte_size = Expr::GetConstantInt(*ctx, Expr::RETURN_TYPE_SIZE);
   for (int i = 1; i < num_args; ++i) {
     if (args[i].is_null) return DecimalVal::null();
     switch (type_byte_size) {

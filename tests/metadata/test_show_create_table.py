@@ -16,6 +16,7 @@ import shlex
 from subprocess import call
 from tests.common.test_vector import *
 from tests.common.impala_test_suite import *
+from tests.common.skip import SkipIf, SkipIfS3
 from tests.util.filesystem_utils import WAREHOUSE
 from tests.util.test_file_parser import remove_comments
 
@@ -55,8 +56,13 @@ class TestShowCreateTable(ImpalaTestSuite):
   def teardown_method(self, method):
     self.cleanup_db(self.TEST_DB_NAME)
 
+  @SkipIfS3.insert
   def test_show_create_table(self, vector):
     self.__run_show_create_table_test_case('QueryTest/show-create-table', vector)
+
+  @SkipIf.kudu_not_supported
+  def test_kudu_show_create_table(self, vector):
+    self.__run_show_create_table_test_case('QueryTest/kudu-show-create', vector)
 
   def __run_show_create_table_test_case(self, test_file_name, vector):
     """
@@ -211,7 +217,7 @@ class ShowCreateTableTestCase(object):
           'name %s that is qualified with a database' % (table_type, test_file_name, name)
     self.table_name = test_db_name + '.' + name
     self.create_table_sql = self.create_table_sql.replace(name, self.table_name, 1)
-    self.show_create_table_sql = 'show create table %s' % (self.table_name)
+    self.show_create_table_sql = 'show create %s %s' % (table_type, self.table_name)
     self.drop_table_sql = "drop %s %s" % (table_type, self.table_name)
 
   def __get_table_name(self, create_table_sql, table_type):

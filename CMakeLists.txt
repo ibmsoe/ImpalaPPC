@@ -18,21 +18,15 @@ if (NOT $ENV{DISABLE_IMPALA_TOOLCHAIN})
   # Enable toolchain variable if the environment is setup
   set(IMPALA_TOOLCHAIN ON)
   message(STATUS "Toolchain build.")
-  # If the toolchain directory does not yet exists, we assume that the dependencies
-  # should be downloaded. If the download script is not available fail the
-  # configuration.
-  if (NOT IS_DIRECTORY $ENV{IMPALA_TOOLCHAIN})
-    set(BOOTSTRAP_CMD "$ENV{IMPALA_HOME}/bin/bootstrap_toolchain.py")
-    # Download and unpack the dependencies
-    message(STATUS "Downloading and extracting dependencies.")
-    execute_process(COMMAND ${BOOTSTRAP_CMD} RESULT_VARIABLE BOOTSTRAP_RESULT)
-    if (${BOOTSTRAP_RESULT} EQUAL 0)
-      message(STATUS "Toolchain bootstrap complete.")
-    else()
-      message(FATAL_ERROR "Toolchain bootstrap failed.")
-    endif()
+  # Download any missing toolchain dependencies. If this fails, fail the build.
+  set(BOOTSTRAP_CMD "$ENV{IMPALA_HOME}/bin/bootstrap_toolchain.py")
+  # Download and unpack the dependencies
+  message(STATUS "Downloading and extracting dependencies.")
+  execute_process(COMMAND ${BOOTSTRAP_CMD} RESULT_VARIABLE BOOTSTRAP_RESULT)
+  if (${BOOTSTRAP_RESULT} EQUAL 0)
+    message(STATUS "Toolchain bootstrap complete.")
   else()
-    message(STATUS "Impala toolchain picked up at $ENV{IMPALA_TOOLCHAIN}")
+    message(FATAL_ERROR "Toolchain bootstrap failed.")
   endif()
 else()
   set(IMPALA_TOOLCHAIN OFF)
@@ -51,13 +45,33 @@ if (NOT DEFINED BUILD_SHARED_LIBS)
 endif()
 
 # Build compile commands database
-set(CMAKE_EXPORT_COMPILE_COMMNDS ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # generate CTest input files
 enable_testing()
 
 # where to find cmake modules
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake_modules")
+
+# Determine the build type. If no build build type is specified, default to debug builds
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE DEBUG)
+endif(NOT CMAKE_BUILD_TYPE)
+
+STRING (TOUPPER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE)
+
+message(STATUS "Build type is ${CMAKE_BUILD_TYPE}")
+
+set(ENABLE_CODE_COVERAGE false)
+if ("${CMAKE_BUILD_TYPE}" STREQUAL "CODE_COVERAGE_DEBUG")
+  set(CMAKE_BUILD_TYPE DEBUG)
+  set(ENABLE_CODE_COVERAGE true)
+elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "CODE_COVERAGE_RELEASE")
+  set(CMAKE_BUILD_TYPE RELEASE)
+  set(ENABLE_CODE_COVERAGE true)
+endif()
+
+message(STATUS "ENABLE_CODE_COVERAGE: ${ENABLE_CODE_COVERAGE}")
 
 # Helper function that given a package name constructs the package_ROOT variable based on
 # the version number extracted from the environment
@@ -86,12 +100,12 @@ if (IMPALA_TOOLCHAIN)
   set_dep_root(GCC)
   set_dep_root(AVRO)
   set_dep_root(BZIP2)
-  set_dep_root(CYRUS_SASL)
   set_dep_root(GFLAGS)
   set_dep_root(GLOG)
   set_dep_root(GPERFTOOLS)
   set_dep_root(GTEST)
   set_dep_root(LLVM)
+  set(LLVM_DEBUG_ROOT $ENV{IMPALA_TOOLCHAIN}/llvm-$ENV{IMPALA_LLVM_DEBUG_VERSION})
   set_dep_root(LZ4)
   set_dep_root(OPENLDAP)
   set_dep_root(RE2)
@@ -212,7 +226,18 @@ set(LIBS ${LIBS} ${GTEST_LIBRARIES})
 message(STATUS "GTest include dir: " ${GTEST_INCLUDE_DIR})
 message(STATUS "GTest library: " ${GTEST_LIBRARY})
 
-# find LLVM
+# Use LLVM release binaries.
+set(LLVM_BINARIES_ROOT ${LLVM_ROOT})
+find_package(LlvmBinaries REQUIRED)
+
+# Find LLVM libraries to link against.
+if (IMPALA_TOOLCHAIN AND ("${CMAKE_BUILD_TYPE}" STREQUAL "DEBUG"
+      OR "${CMAKE_BUILD_TYPE}" STREQUAL "ADDRESS_SANITIZER"))
+  # Use the LLVM libaries with assertions for debug builds.
+  set(LLVM_ROOT ${LLVM_DEBUG_ROOT})
+endif()
+message(STATUS "LLVM_ROOT: " ${LLVM_ROOT})
+
 find_package(Llvm REQUIRED)
 include_directories(${LLVM_INCLUDE_DIR})
 set(LIBS ${LIBS} ${LLVM_MODULE_LIBS})
@@ -220,7 +245,9 @@ set(LIBS ${LIBS} ${LLVM_MODULE_LIBS})
 # find Sasl
 find_package(Sasl REQUIRED)
 include_directories(${SASL_INCLUDE_DIR})
-set(SASL_LIBRARY saslstatic)
+add_library(sasllib SHARED IMPORTED)
+set_target_properties(sasllib PROPERTIES IMPORTED_LOCATION ${SASL_SHARED_LIB})
+set(SASL_LIBRARY sasllib)
 message(STATUS "Sasl include dir: " ${SASL_INCLUDE_DIR})
 message(STATUS "Sasl library: " ${SASL_LIBRARY})
 
@@ -280,6 +307,20 @@ include_directories(${AVRO_INCLUDE_DIR})
 set(LIBS ${LIBS} ${AVRO_STATIC_LIB})
 message(STATUS "Avro include dir: " ${AVRO_INCLUDE_DIR})
 message(STATUS "Avro static library: " ${AVRO_STATIC_LIB})
+
+if($ENV{KUDU_IS_SUPPORTED} STREQUAL true)
+  add_definitions(-DUSE_KUDU)
+  # KuduClient can use GLOG
+  add_definitions(-DKUDU_HEADERS_USE_GLOG)
+  if(NOT $ENV{KUDU_CLIENT_DIR} EQUAL "")
+    set(kuduClient_DIR "$ENV{KUDU_CLIENT_DIR}/usr/local/share/kuduClient/cmake")
+  else()
+    set(kuduClient_DIR
+        "$ENV{IMPALA_TOOLCHAIN}/kudu-$ENV{IMPALA_KUDU_VERSION}/share/kuduClient/cmake")
+  endif()
+  find_package(kuduClient REQUIRED)
+  include_directories(${KUDU_CLIENT_INCLUDE_DIR})
+endif()
 
 # find jni headers and libs
 find_package(JNI REQUIRED)

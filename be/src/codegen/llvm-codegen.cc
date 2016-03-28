@@ -17,6 +17,7 @@
 #include <iostream>
 #include <sstream>
 #include <boost/thread/mutex.hpp>
+#include <gutil/strings/substitute.h>
 
 #include <llvm/ADT/Triple.h>
 #include <llvm/Analysis/InstructionSimplify.h>
@@ -30,6 +31,7 @@
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Support/DynamicLibrary.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/Host.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/NoFolder.h>
@@ -54,10 +56,12 @@
 #include "util/cpu-info.h"
 #include "util/hdfs-util.h"
 #include "util/path-builder.h"
+#include "util/test-info.h"
 
 #include "common/names.h"
 
 using namespace llvm;
+using namespace strings;
 using llvm::legacy::FunctionPassManager;
 using llvm::legacy::PassManager;
 
@@ -80,9 +84,16 @@ namespace impala {
 static mutex llvm_initialization_lock;
 static bool llvm_initialized = false;
 
+static void LlvmCodegenHandleError(void* user_data, const std::string& reason,
+    bool gen_crash_diag) {
+  LOG(FATAL) << "LLVM hit fatal error: " << reason.c_str();
+}
+
 void LlvmCodeGen::InitializeLlvm(bool load_backend) {
   mutex::scoped_lock initialization_lock(llvm_initialization_lock);
   if (llvm_initialized) return;
+  llvm::remove_fatal_error_handler();
+  llvm::install_fatal_error_handler(LlvmCodegenHandleError);
   // This allocates a global llvm struct and enables multithreading.
   // There is no real good time to clean this up but we only make it once.
   //TODO:: Need to confirm this with LLVM 3.5 developer!!!!
@@ -110,14 +121,13 @@ LlvmCodeGen::LlvmCodeGen(ObjectPool* pool, const string& id) :
   is_compiled_(false),
   context_(new llvm::LLVMContext()),
   module_(NULL),
-  execution_engine_(NULL),
-  debug_trace_fn_(NULL) {
+  execution_engine_(NULL) {
 
   DCHECK(llvm_initialized) << "Must call LlvmCodeGen::InitializeLlvm first.";
 
   load_module_timer_ = ADD_TIMER(&profile_, "LoadTime");
   prepare_module_timer_ = ADD_TIMER(&profile_, "PrepareTime");
-  module_file_size_ = ADD_COUNTER(&profile_, "ModuleFileSize", TUnit::BYTES);
+  module_bitcode_size_ = ADD_COUNTER(&profile_, "ModuleBitcodeSize", TUnit::BYTES);
   codegen_timer_ = ADD_TIMER(&profile_, "CodegenTime");
   optimization_timer_ = ADD_TIMER(&profile_, "OptimizationTime");
   compile_timer_ = ADD_TIMER(&profile_, "CompileTime");
@@ -168,7 +178,7 @@ Status LlvmCodeGen::LoadModuleFromFile(LlvmCodeGen* codegen, const string& file,
 	memBuffer = std::move(BufferOrErr.get());
   }
 
-  COUNTER_ADD(codegen->module_file_size_, memBuffer.get()->getBufferSize());
+  COUNTER_ADD(codegen->module_bitcode_size_, memBuffer.get()->getBufferSize());
   return LoadModuleFromMemory(codegen, memBuffer.get(), file, module);
 }
 
@@ -183,6 +193,7 @@ Status LlvmCodeGen::LoadModuleFromMemory(LlvmCodeGen* codegen, MemoryBuffer* mod
     ss << "Could not parse module " << module_name << ": " << EC.message();
     return Status(ss.str());
   }
+  COUNTER_ADD(codegen->module_bitcode_size_, module_ir->getBufferSize());
   return Status::OK();
 }
 
@@ -260,8 +271,8 @@ Status LlvmCodeGen::LoadImpalaIR(
       if (fn_name.find(FN_MAPPINGS[j].fn_name) != string::npos) {
         // TODO: make this a DCHECK when we resolve IMPALA-2439
         CHECK(codegen->loaded_functions_[FN_MAPPINGS[j].fn] == NULL)
-            << "Duplicate definition found for function " << FN_MAPPINGS[j].fn << ": "
-            << fn_name;
+            << "Duplicate definition found for function " << FN_MAPPINGS[j].fn_name
+            << ": " << fn_name;
         functions[i]->addFnAttr(Attribute::AlwaysInline);
         codegen->loaded_functions_[FN_MAPPINGS[j].fn] = functions[i];
         ++parsed_functions;
@@ -328,10 +339,10 @@ Status LlvmCodeGen::Init() {
 }
 
 LlvmCodeGen::~LlvmCodeGen() {
-  for (map<Function*, bool>::iterator iter = jitted_functions_.begin();
+  for (set<Function*>::iterator iter = jitted_functions_.begin();
       iter != jitted_functions_.end(); ++iter) {
 //    execution_engine_->freeMachineCodeForFunction(iter->first);
-      LLVMFreeMachineCodeForFunction(wrap(execution_engine_.get()), wrap(iter->first));
+      LLVMFreeMachineCodeForFunction(wrap(execution_engine_.get()), wrap(*iter));
   }
 }
 
@@ -427,6 +438,10 @@ Value* LlvmCodeGen::GetIntConstant(PrimitiveType type, int64_t val) {
   }
 }
 
+Value* LlvmCodeGen::GetIntConstant(int num_bytes, int64_t val) {
+  return ConstantInt::get(context(), APInt(8 * num_bytes, val));
+}
+
 AllocaInst* LlvmCodeGen::CreateEntryBlockAlloca(Function* f, const NamedVariable& var) {
   IRBuilder<> tmp(&f->getEntryBlock(), f->getEntryBlock().begin());
   AllocaInst* alloca = tmp.CreateAlloca(var.type, 0, var.name.c_str());
@@ -461,11 +476,14 @@ Function* LlvmCodeGen::GetLibCFunction(FnPrototype* prototype) {
   return func;
 }
 
-Function* LlvmCodeGen::GetFunction(IRFunction::Type function) {
+Function* LlvmCodeGen::GetFunction(IRFunction::Type function, bool clone) {
   DCHECK(loaded_functions_[function] != NULL);
-  return loaded_functions_[function];
+  Function* fn = loaded_functions_[function];
+  if (clone) return CloneFunction(fn);
+  return fn;
 }
 
+// TODO: this should return a Status
 bool LlvmCodeGen::VerifyFunction(Function* fn) {
   if (is_corrupt_) return false;
 
@@ -478,8 +496,8 @@ bool LlvmCodeGen::VerifyFunction(Function* fn) {
     Function* called_fn = call_instr->getCalledFunction();
     // look for call to Expr::GetConstant()
     if (called_fn != NULL &&
-        called_fn->getName().find(Expr::GET_CONSTANT_SYMBOL_PREFIX) != string::npos) {
-      LOG(ERROR) << "Found call to Expr::GetConstant(): " << Print(call_instr);
+        called_fn->getName().find(Expr::GET_CONSTANT_INT_SYMBOL_PREFIX) != string::npos) {
+      LOG(ERROR) << "Found call to Expr::GetConstant*(): " << Print(call_instr);
       is_corrupt_ = true;
       break;
     }
@@ -546,23 +564,12 @@ Function* LlvmCodeGen::FnPrototype::GeneratePrototype(
   return fn;
 }
 
-Function* LlvmCodeGen::ReplaceCallSites(Function* caller, bool update_in_place,
-    Function* new_fn, const string& replacee_name, int* replaced) {
+int LlvmCodeGen::ReplaceCallSites(Function* caller, Function* new_fn,
+    const string& replacee_name) {
   DCHECK(caller->getParent() == module_);
   DCHECK(caller != NULL);
   DCHECK(new_fn != NULL);
-
-  if (!update_in_place) {
-    caller = CloneFunction(caller);
-  } else if (jitted_functions_.find(caller) != jitted_functions_.end()) {
-    // This function is already dynamically linked, unlink it.
-//    execution_engine_->freeMachineCodeForFunction(caller);
-      LLVMFreeMachineCodeForFunction(wrap(execution_engine_.get()), wrap(caller));
-
-    jitted_functions_.erase(caller);
-  }
-
-  *replaced = 0;
+  int replaced = 0;
   for (inst_iterator iter = inst_begin(caller); iter != inst_end(caller); ++iter) {
     Instruction* instr = &*iter;
     // look for call instructions
@@ -573,12 +580,11 @@ Function* LlvmCodeGen::ReplaceCallSites(Function* caller, bool update_in_place,
       if (old_fn != NULL && old_fn->getName().find(replacee_name) != string::npos) {
         // Replace the called function
         call_instr->setCalledFunction(new_fn);
-        ++*replaced;
+        ++replaced;
       }
     }
   }
-
-  return caller;
+  return replaced;
 }
 
 Function* LlvmCodeGen::CloneFunction(Function* fn) {
@@ -806,49 +812,30 @@ void* LlvmCodeGen::JitFunction(Function* function) {
   void* jitted_function = execution_engine_->getPointerToFunction(function);
   boost::lock_guard<mutex> l(jitted_functions_lock_);
   if (jitted_function != NULL) {
-    jitted_functions_[function] = true;
+    jitted_functions_.insert(function);
   }
   return jitted_function;
 }
 
-// Wrapper around printf to make it easier to call from IR
-extern "C" void DebugTrace(const char* str) {
-  printf("LLVM Trace: %s\n", str);
-}
-
-void LlvmCodeGen::CodegenDebugTrace(LlvmBuilder* builder, const char* str) {
+void LlvmCodeGen::CodegenDebugTrace(LlvmBuilder* builder, const char* str,
+    Value* v1) {
   LOG(ERROR) << "Remove IR codegen debug traces before checking in.";
-
-  // Lazily link in debug function to the module
-  if (debug_trace_fn_ == NULL) {
-    vector<Type*> args;
-    args.push_back(ptr_type_);
-    FunctionType* fn_type = FunctionType::get(void_type_, args, false);
-    debug_trace_fn_ = Function::Create(fn_type, GlobalValue::ExternalLinkage,
-        "DebugTrace", module_);
-
-    DCHECK(debug_trace_fn_ != NULL);
-    // DebugTrace shouldn't already exist (llvm mangles function names if there
-    // are duplicates)
-    DCHECK(debug_trace_fn_->getName() ==  "DebugTrace");
-
-    debug_trace_fn_->setCallingConv(CallingConv::C);
-
-    // Add a mapping to the execution engine so it can link the DebugTrace function
-    execution_engine_->addGlobalMapping(debug_trace_fn_,
-        reinterpret_cast<void*>(&DebugTrace));
-  }
 
   // Make a copy of str into memory owned by this object.  This is no guarantee that str is
   // still around when the debug printf is executed.
-  debug_strings_.push_back(str);
-  str = debug_strings_[debug_strings_.size() - 1].c_str();
+  debug_strings_.push_back(Substitute("LLVM Trace: $0", str));
+  str = debug_strings_.back().c_str();
 
-  // Call the function by turning 'str' into a constant ptr value
+  Function* printf = module()->getFunction("printf");
+  DCHECK(printf != NULL);
+
+  // Call printf by turning 'str' into a constant ptr value
   Value* str_ptr = CastPtrToLlvmPtr(ptr_type_, const_cast<char*>(str));
+
   vector<Value*> calling_args;
   calling_args.push_back(str_ptr);
-  builder->CreateCall(debug_trace_fn_, calling_args);
+  if (v1 != NULL) calling_args.push_back(v1);
+  builder->CreateCall(printf, calling_args);
 }
 
 void LlvmCodeGen::GetFunctions(vector<Function*>* functions) {
@@ -908,6 +895,7 @@ Function* LlvmCodeGen::CodegenMinMax(const ColumnType& type, bool min) {
     case TYPE_SMALLINT:
     case TYPE_INT:
     case TYPE_BIGINT:
+    case TYPE_DECIMAL:
       if (min) {
         compare = builder.CreateICmpSLT(params[0], params[1]);
       } else {
@@ -939,7 +927,7 @@ Function* LlvmCodeGen::CodegenMinMax(const ColumnType& type, bool min) {
     builder.CreateRet(params[1]);
   }
 
-  if (!VerifyFunction(fn)) return NULL;
+  fn = FinalizeFunction(fn);
   return fn;
 }
 
@@ -1049,7 +1037,7 @@ Function* LlvmCodeGen::GetHashFunction(int num_bytes) {
     if (num_bytes == -1) {
       // -1 indicates variable length, just return the generic loop based
       // hash fn.
-      return GetFunction(IRFunction::HASH_CRC);
+      return GetFunction(IRFunction::HASH_CRC, false);
     }
 
     map<int, Function*>::iterator cached_fn = hash_fns_.find(num_bytes);
@@ -1139,7 +1127,7 @@ Function* LlvmCodeGen::GetHashFunction(int num_bytes) {
 
 static Function* GetLenOptimizedHashFn(
     LlvmCodeGen* codegen, IRFunction::Type f, int len) {
-  Function* fn = codegen->GetFunction(f);
+  Function* fn = codegen->GetFunction(f, false);
   DCHECK(fn != NULL);
   if (len != -1) {
     // Clone this function since we're going to modify it by replacing the

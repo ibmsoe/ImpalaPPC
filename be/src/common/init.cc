@@ -14,21 +14,27 @@
 
 #include "common/init.h"
 
-#include <google/heap-profiler.h>
-#include <google/malloc_extension.h>
+#include <gperftools/heap-profiler.h>
+#include <gperftools/malloc_extension.h>
 
 #include "common/logging.h"
 #include "common/status.h"
+#include "exec/kudu-util.h"
 #include "exprs/expr.h"
+#include "gutil/atomicops.h"
 #include "util/cpu-info.h"
 #include "util/debug-util.h"
+#include "util/decimal-util.h"
 #include "util/disk-info.h"
 #include "util/logging-support.h"
 #include "util/mem-info.h"
 #include "util/network-util.h"
 #include "util/os-info.h"
+#include "util/pretty-printer.h"
 #include "util/redactor.h"
 #include "util/test-info.h"
+#include "util/thread.h"
+#include "util/time.h"
 #include "runtime/decimal-value.h"
 #include "runtime/exec-env.h"
 #include "runtime/hdfs-fs-cache.h"
@@ -37,9 +43,10 @@
 #include "runtime/timestamp-parse-util.h"
 #include "rpc/authentication.h"
 #include "rpc/thrift-util.h"
-#include "util/thread.h"
 
 #include "common/names.h"
+
+using namespace impala;
 
 DECLARE_string(hostname);
 DECLARE_string(redaction_rules_file);
@@ -51,6 +58,13 @@ DECLARE_bool(enable_process_lifetime_heap_profiling);
 DEFINE_int32(max_log_files, 10, "Maximum number of log files to retain per severity "
     "level. The most recent log files are retained. If set to 0, all log files are "
     "retained.");
+
+DEFINE_int64(pause_monitor_sleep_time_ms, 500, "Sleep time in milliseconds for "
+    "pause monitor thread.");
+
+DEFINE_int64(pause_monitor_warn_threshold_ms, 10000, "If the pause monitor sleeps "
+    "more than this time period, a warning is logged. If set to 0 or less, pause monitor"
+    " is disabled.");
 
 // Defined by glog. This allows users to specify the log level using a glob. For
 // example -vmodule=*scanner*=3 would enable full logging for scanners. If redaction
@@ -70,9 +84,15 @@ using std::string;
 //    logbufsecs has passed since the previous flush when a new log is written. That means
 //    that on a quiet system, logs will be buffered indefinitely.
 // 2) checks that tcmalloc has not left too much memory in its pageheap
-shared_ptr<impala::Thread> maintenance_thread;
+static scoped_ptr<impala::Thread> maintenance_thread;
+
+// A pause monitor thread to monitor process pauses in impala daemons. The thread sleeps
+// for a short interval of time (THREAD_SLEEP_TIME_MS), wakes up and calculates the actual
+// time slept. If that exceeds PAUSE_WARN_THRESHOLD_MS, a warning is logged.
+static scoped_ptr<impala::Thread> pause_monitor;
+
 static void MaintenanceThread() {
-  while(true) {
+  while (true) {
     sleep(FLAGS_logbufsecs);
 
     google::FlushLogFiles(google::GLOG_INFO);
@@ -108,7 +128,7 @@ static void MaintenanceThread() {
     // be out of sync with the process usage. Update the process tracker periodically.
     impala::ExecEnv* env = impala::ExecEnv::GetInstance();
     if (env != NULL && env->process_mem_tracker() != NULL) {
-      env->process_mem_tracker()->Release(0);
+      env->process_mem_tracker()->RefreshConsumptionFromMetric();
     }
 #endif
     // TODO: we should also update the process mem tracker with the reported JVM
@@ -119,13 +139,27 @@ static void MaintenanceThread() {
   }
 }
 
+static void PauseMonitorLoop() {
+  if (FLAGS_pause_monitor_warn_threshold_ms <= 0) return;
+  int64_t time_before_sleep = MonotonicMillis();
+  while (true) {
+    SleepForMs(FLAGS_pause_monitor_sleep_time_ms);
+    int64_t sleep_time = MonotonicMillis() - time_before_sleep;
+    time_before_sleep += sleep_time;
+    if (sleep_time > FLAGS_pause_monitor_warn_threshold_ms) {
+      LOG(WARNING) << "A process pause was detected for approximately " <<
+          PrettyPrinter::Print(sleep_time, TUnit::TIME_MS);
+    }
+  }
+}
+
 void impala::InitCommonRuntime(int argc, char** argv, bool init_jvm,
     TestInfo::Mode test_mode) {
   CpuInfo::Init();
   DiskInfo::Init();
   MemInfo::Init();
   OsInfo::Init();
-  DecimalUtil::InitMaxUnscaledDecimal();
+  DecimalUtil::InitMaxUnscaledDecimal16();
   TestInfo::Init(test_mode);
 
   // Verify CPU meets the minimum requirements before calling InitGoogleLoggingSafe()
@@ -147,6 +181,7 @@ void impala::InitCommonRuntime(int argc, char** argv, bool init_jvm,
     if (!error_message.empty()) EXIT_WITH_ERROR(error_message);
   }
   impala::InitGoogleLoggingSafe(argv[0]);
+  AtomicOps_x86CPUFeaturesInit();
   impala::InitThreading();
   impala::TimestampParser::Init();
   EXIT_IF_ERROR(impala::InitAuth(argv[0]));
@@ -154,6 +189,9 @@ void impala::InitCommonRuntime(int argc, char** argv, bool init_jvm,
   // Initialize maintenance_thread after InitGoogleLoggingSafe and InitThreading.
   maintenance_thread.reset(
       new Thread("common", "maintenance-thread", &MaintenanceThread));
+
+  pause_monitor.reset(
+      new Thread("common", "pause-monitor", &PauseMonitorLoop));
 
   LOG(INFO) << impala::GetVersionString();
   LOG(INFO) << "Using hostname: " << FLAGS_hostname;
@@ -182,6 +220,8 @@ void impala::InitCommonRuntime(int argc, char** argv, bool init_jvm,
     DCHECK(false);
     Expr::InitBuiltinsDummy();
   }
+
+  impala::InitKuduLogging();
 
 #ifndef ADDRESS_SANITIZER
   // tcmalloc and address sanitizer can not be used together

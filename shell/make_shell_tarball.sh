@@ -19,7 +19,7 @@
 # ${IMPALA_HOME}/shell/build.
 
 set -euo pipefail
-trap 'echo Error in $0 at line $LINENO: $(awk "NR == $LINENO" $0)' ERR
+trap 'echo Error in $0 at line $LINENO: $(cd "'$PWD'" && awk "NR == $LINENO" $0)' ERR
 
 if [ "x${IMPALA_HOME}" == "x" ]; then
   echo "\$IMPALA_HOME must be set"
@@ -85,7 +85,7 @@ for MODULE in ${SHELL_HOME}/ext-py/*; do
   rm -rf dist 2>&1 > /dev/null
   rm -rf build 2>&1 > /dev/null
   echo "Creating an egg for ${MODULE}"
-  python setup.py bdist_egg clean
+  python setup.py -q bdist_egg clean
   cp dist/*.egg ${TARBALL_ROOT}/ext-py
   popd 2>&1 > /dev/null
 done

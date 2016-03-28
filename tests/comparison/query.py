@@ -12,20 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from logging import getLogger
 from copy import deepcopy
+from logging import getLogger
 
-from tests.comparison.common import (
-    CollectionColumn,
-    Column,
-    StructColumn,
-    Table,
-    TableExpr,
-    TableExprList,
-    ValExpr,
-    ValExprList)
-from tests.comparison.funcs import And, Equals
-from tests.comparison.types import Boolean, BigInt
+from common import Column, TableExpr, TableExprList, ValExpr, ValExprList
+from db_types import Float
 
 LOG = getLogger(__name__)
 
@@ -45,6 +36,7 @@ class Query(object):
     self.union_clause = None
     self.order_by_clause = None
     self.limit_clause = None
+    self.execution = 'RAW'
 
   def __deepcopy__(self, memo):
     other = Query()
@@ -59,6 +51,7 @@ class Query(object):
     other.union_clause = deepcopy(self.union_clause, memo)
     other.order_by_clause = deepcopy(self.order_by_clause, memo)
     other.limit_clause = deepcopy(self.limit_clause, memo)
+    other.execution = self.execution
     return other
 
   @property
@@ -131,6 +124,11 @@ class SelectClause(object):
        this list will be propagated but additions will not be.
     '''
     return SelectItemSubList(self.items, lambda item: item.is_analytic)
+
+  @property
+  def contains_approximate_types(self):
+    '''Returns true if there is a select item that is approximate (such as Float).'''
+    return any(item.type.is_approximate() for item in self.items)
 
   def __deepcopy__(self, memo):
     other = SelectClause([deepcopy(item, memo) for item in self.items])

@@ -85,11 +85,16 @@ class PlanFragmentExecutor {
   ~PlanFragmentExecutor();
 
   /// Prepare for execution. Call this prior to Open().
-  /// This call won't block.
-  /// runtime_state() and row_desc() will not be valid until Prepare() is called.
-  /// If request.query_options.mem_limit > 0, it is used as an approximate limit on the
-  /// number of bytes this query can consume at runtime.
-  /// The query will be aborted (MEM_LIMIT_EXCEEDED) if it goes over that limit.
+  ///
+  /// runtime_state() and row_desc() will not be valid until Prepare() is
+  /// called. runtime_state() will always be valid after Prepare() returns, unless the
+  /// query was cancelled before Prepare() was called.  If request.query_options.mem_limit
+  /// > 0, it is used as an approximate limit on the number of bytes this query can
+  /// consume at runtime.  The query will be aborted (MEM_LIMIT_EXCEEDED) if it goes over
+  /// that limit.
+  ///
+  /// If Cancel() is called before Prepare(), Prepare() is a no-op and returns
+  /// Status::CANCELLED;
   Status Prepare(const TExecPlanFragmentParams& request);
 
   /// Start execution. Call this prior to GetNext().
@@ -114,7 +119,14 @@ class PlanFragmentExecutor {
   /// in Open()/GetNext().
   void Close();
 
-  /// Initiate cancellation. Must not be called until after Prepare() returned.
+  /// Initiate cancellation. If called concurrently with Prepare(), will wait for
+  /// Prepare() to finish in order to properly tear down Prepare()'d state.
+  ///
+  /// Cancel() may be called more than once. Calls after the first will have no
+  /// effect. Duplicate calls to Cancel() are not serialised, and may safely execute
+  /// concurrently.
+  ///
+  /// It is legal to call Cancel() if Prepare() returned an error.
   void Cancel();
 
   /// Returns true if this query has a limit and it has been reached.
@@ -155,9 +167,6 @@ class PlanFragmentExecutor {
   /// true if plan_->GetNext() indicated that it's done
   bool done_;
 
-  /// true if Prepare() returned OK
-  bool prepared_;
-
   /// true if Close() has been called
   bool closed_;
 
@@ -174,13 +183,28 @@ class PlanFragmentExecutor {
   /// 2. status_lock_
   boost::mutex status_lock_;
 
+  /// 'runtime_state_' has to be before 'sink_' as 'sink_' relies on the object pool of
+  /// 'runtime_state_'. This means 'sink_' is destroyed first so any implicit connections
+  /// (e.g. mem_trackers_) from 'runtime_state_' to 'sink_' need to be severed prior to
+  /// the dtor of 'runtime_state_'.
+  boost::scoped_ptr<RuntimeState> runtime_state_;
   /// Output sink for rows sent to this fragment. May not be set, in which case rows are
   /// returned via GetNext's row batch
   /// Created in Prepare (if required), owned by this object.
   boost::scoped_ptr<DataSink> sink_;
-  boost::scoped_ptr<RuntimeState> runtime_state_;
   boost::scoped_ptr<RowBatch> row_batch_;
   boost::scoped_ptr<TRowBatch> thrift_batch_;
+
+  /// Protects is_prepared_ and is_cancelled_, and is also used to coordinate between
+  /// Prepare() and Cancel() to ensure mutual exclusion.
+  boost::mutex prepare_lock_;
+
+  /// True if Prepare() has been called and done some work - even if it returned an
+  /// error. If Cancel() was called before Prepare(), is_prepared_ will not be set.
+  bool is_prepared_;
+
+  /// True if and only if Cancel() has been called.
+  bool is_cancelled_;
 
   /// A counter for the per query, per host peak mem usage. Note that this is not the
   /// max of the peak memory of all fragments running on a host since it needs to take
@@ -207,7 +231,7 @@ class PlanFragmentExecutor {
   /// be fired. It is initialized to 0 and atomically swapped to 1 when a completed
   /// fragment report is about to be fired. Used for reducing the probability that a
   /// report is sent twice at the end of the fragment.
-  AtomicInt<int> completed_report_sent_;
+  AtomicInt32 completed_report_sent_;
 
   /// Sampled memory usage at even time intervals.
   RuntimeProfile::TimeSeriesCounter* mem_usage_sampled_counter_;
