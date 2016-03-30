@@ -9,7 +9,8 @@
 # First look in LLVM_ROOT then ENV{LLVM_HOME} then system path.
 find_program(LLVM_CONFIG_EXECUTABLE llvm-config
   PATHS
-  ${LLVM_ROOT}/bin
+#  ${LLVM_ROOT}/bin
+  "/usr/local/bin"
   $ENV{LLVM_HOME}
   NO_DEFAULT_PATH
 )

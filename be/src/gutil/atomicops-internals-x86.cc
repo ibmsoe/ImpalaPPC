@@ -102,6 +102,10 @@ void AtomicOps_x86CPUFeaturesInit() {
   AtomicOps_Internalx86CPUFeaturesInit();
 }
 
+void AtomicOpsCPUFeaturesInit(){
+  AtomicOps_Internalx86CPUFeaturesInit();
+}
+
 #endif
 
 #endif  // GUTIL_ATOMICOPS_INTERNALS_X86_H_

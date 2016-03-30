@@ -77,7 +77,7 @@
  * Porting to other related platforms should not be difficult.
  */
 #if (defined(__i386__) || defined(__x86_64__) || defined(__arm__) || \
-     defined(__mips__) || defined(__PPC__)) && defined(__linux)
+     defined(__mips__) || defined(__PPC__) || defined(__ppc64__) || defined(__powerpc64__)) && defined(__linux)
 
 #ifndef SYS_CPLUSPLUS
 #ifdef __cplusplus

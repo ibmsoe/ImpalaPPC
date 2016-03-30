@@ -34,7 +34,6 @@
 using boost::algorithm::join;
 using namespace llvm;
 using namespace strings;
-const int impala::RowDescriptor::INVALID_IDX;
 namespace impala {
 
 const int RowDescriptor::INVALID_IDX;
