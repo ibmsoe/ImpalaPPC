@@ -49,6 +49,8 @@ extern struct AtomicOps_x86CPUFeatureStruct AtomicOps_Internalx86CPUFeatures;
 // AtomicOps initialisation for open source use.
 void AtomicOps_x86CPUFeaturesInit();
 
+void AtomicOpsCPUFeaturesInit();
+
 typedef int32_t Atomic32;
 typedef int64_t Atomic64;
 

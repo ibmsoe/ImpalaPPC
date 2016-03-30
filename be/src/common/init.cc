@@ -181,7 +181,7 @@ void impala::InitCommonRuntime(int argc, char** argv, bool init_jvm,
     if (!error_message.empty()) EXIT_WITH_ERROR(error_message);
   }
   impala::InitGoogleLoggingSafe(argv[0]);
-  AtomicOps_x86CPUFeaturesInit();
+  AtomicOpsCPUFeaturesInit();
   impala::InitThreading();
   impala::TimestampParser::Init();
   EXIT_IF_ERROR(impala::InitAuth(argv[0]));

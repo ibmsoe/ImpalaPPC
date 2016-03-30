@@ -26,23 +26,28 @@
 #ifndef SUPERSONIC_OPENSOURCE_AUXILIARY_ATOMICOPS_INTERNALS_POWERPC_H_
 #define SUPERSONIC_OPENSOURCE_AUXILIARY_ATOMICOPS_INTERNALS_POWERPC_H_
 
-typedef int32_t Atomic32;
 #define BASE_HAS_ATOMIC64 1  // Use only in tests and base/atomic*
 
 
 #define ATOMICOPS_COMPILER_BARRIER() __asm__ __volatile__("" : : : "memory")
 
+inline void AtomicOpsCPUFeaturesInit(){}
+
 // 32-bit PowerPC is not supported yet.
-#ifdef defined(__GNUC__)
-#ifndef defined (__ppc64__)
+#if defined(__GNUC__)
+/*#if !defined(__ppc64__) || !defined(__powerpc64__)
 #error "Only PowerPC64 is supported"
+#endif*/
 #endif
-#endif
+
+typedef int64_t Atomic64;
+typedef int32_t Atomic32;
 
 namespace base {
 namespace subtle {
 
 typedef int64_t Atomic64;
+typedef int32_t Atomic32;
 
 // sync vs. lwsync:
 // 1. lwsync only works in cache enabled memory (system memory).  lwsync is
@@ -72,6 +77,12 @@ inline Atomic32 NoBarrier_CompareAndSwap(volatile Atomic32* ptr,
                        : "b"(ptr), "r"(old_value), "r"(new_value)
                        : "cc");
   return value;
+}
+
+inline Atomic32 Barrier_CompareAndSwap(volatile Atomic32* ptr,
+                                       Atomic32 old_value,
+                                       Atomic32 new_value) {
+  return NoBarrier_CompareAndSwap(ptr, old_value, new_value);
 }
 
 inline Atomic32 NoBarrier_AtomicExchange(volatile Atomic32* ptr,
@@ -149,6 +160,10 @@ inline void NoBarrier_Store(volatile Atomic32* ptr, Atomic32 value) {
   *ptr = value;
 }
 
+inline void PauseCPU() {
+  asm volatile ("or 1,1,1");
+}
+
 inline void Acquire_Store(volatile Atomic32* ptr, Atomic32 value) {
   *ptr = value;
   MemoryBarrier();
@@ -191,6 +206,12 @@ inline Atomic64 NoBarrier_CompareAndSwap(volatile Atomic64* ptr,
                        : "b"(ptr), "r"(old_value), "r"(new_value)
                        : "cc");
   return value;
+}
+
+inline Atomic64 Barrier_CompareAndSwap(volatile Atomic64* ptr,
+                                       Atomic64 old_value,
+                                       Atomic64 new_value) {
+  return NoBarrier_CompareAndSwap(ptr, old_value, new_value);
 }
 
 inline Atomic64 NoBarrier_AtomicExchange(volatile Atomic64* ptr,

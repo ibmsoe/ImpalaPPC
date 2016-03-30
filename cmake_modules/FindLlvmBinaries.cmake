@@ -5,7 +5,8 @@
 
 find_program(LLVM_BINARIES_CONFIG_EXECUTABLE llvm-config
   PATHS
-  ${LLVM_BINARIES_ROOT}/bin
+#  ${LLVM_BINARIES_ROOT}/bin
+  "/usr/local/bin"
   $ENV{LLVM_HOME}
   NO_DEFAULT_PATH
 )

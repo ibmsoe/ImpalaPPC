@@ -9,7 +9,7 @@ allpairs == 2.0.1
 argparse == 1.4.0
 cm-api == 10.0.0
   # Already available as part of python on Linux.
-  readline == 6.2.4.1; sys_platform == 'darwin'
+  readline == 6.2.4.1; sys_platform == 'linux2'
 Fabric == 1.10.2
   paramiko == 1.15.2
   pycrypto == 2.6.1
