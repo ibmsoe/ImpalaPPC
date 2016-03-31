@@ -34,10 +34,8 @@
 inline void AtomicOpsCPUFeaturesInit(){}
 
 // 32-bit PowerPC is not supported yet.
-#if defined(__GNUC__)
-/*#if !defined(__ppc64__) || !defined(__powerpc64__)
+#ifndef _ARCH_PPC64
 #error "Only PowerPC64 is supported"
-#endif*/
 #endif
 
 typedef int64_t Atomic64;

@@ -70,8 +70,8 @@ template<typename T>
 class AtomicInt {
  public:
   AtomicInt(T initial = 0) : value_(initial) {
-    DCHECK((sizeof(T) == sizeof(base::subtle::Atomic32)) ||
-        (sizeof(T) == sizeof(base::subtle::Atomic64)));
+    DCHECK(sizeof(T) == sizeof(base::subtle::Atomic32) ||
+        sizeof(T) == sizeof(base::subtle::Atomic64));
   }
 
   /// Atomic load with "acquire" memory-ordering semantic.

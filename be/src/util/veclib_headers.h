@@ -10,8 +10,8 @@
 #include "util/vecmisc.h"
 #include "util/vec128int.h"
 
-#define SSE4_crc32_u8 vec_crc321ub
-#define SSE4_crc32_u32 vec_crc324ub
+#define _mm_crc32_u8 vec_crc321ub
+#define _mm_crc32_u32 vec_crc324ub
 //#define POPCNT_popcnt_u64 vec_popcount1uw
 #define _mm_loadu_si128 vec_load1q
 #define _mm_loadl_epi64 vec_loadlower1sd
