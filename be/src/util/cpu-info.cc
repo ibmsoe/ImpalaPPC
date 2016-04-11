@@ -135,6 +135,25 @@ void CpuInfo::Init() {
   size_t sizeof_linesize = sizeof(linesize);
   sysctlbyname("hw.cachelinesize", &linesize, &sizeof_linesize, NULL, 0);
   for (size_t i = 0; i < 3; ++i) cache_line_sizes_[i] = linesize;
+
+#elif defined(__ALTIVEC__) // For PowerPC, sysconf does not work to get cache size
+
+  ifstream cacheSizeInfo("/sys/devices/system/cpu/cpu0/cache/index0/size", ios::in);
+  while (cacheSizeInfo) {
+    getline(cacheSizeInfo, line);
+   if(!line.empty())
+      cache_sizes_[0] = atoi(line.c_str()) ;
+  }
+  if (cacheSizeInfo.is_open())   cacheSizeInfo.close();
+
+  ifstream cacheLineSizeInfo("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size", ios::in);
+  while (cacheLineSizeInfo) {
+    getline(cacheLineSizeInfo, line);
+    if(!line.empty())
+       cache_line_sizes_[0] = atoi(line.c_str());
+  }
+  if (cacheLineSizeInfo.is_open())   cacheLineSizeInfo.close();
+
 #else
   // Call sysconf to query for the cache sizes
   cache_sizes_[0] = sysconf(_SC_LEVEL1_DCACHE_SIZE);
