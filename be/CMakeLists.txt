@@ -61,7 +61,7 @@ SET(CXX_CLANG_FLAGS "-Qunused-arguments -fcolor-diagnostics -Wno-unused-local-ty
 # For any gcc builds:
 #   -g: Enable symbols for profiler tools
 #   -Wno-unused-local-typedefs: Do not warn for local typedefs that are unused.
-SET(CXX_GCC_FLAGS "-g -Wno-unused-local-typedefs -mpower8-vector")
+SET(CXX_GCC_FLAGS "-g -Wno-unused-local-typedefs -mpower8-vector -fsigned-char")
 
 # compiler flags for different build types (run 'cmake -DCMAKE_BUILD_TYPE=<type> .')
 # For CMAKE_BUILD_TYPE=Debug

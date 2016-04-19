@@ -71,6 +71,40 @@ struct ExprValue {
     string_val.len = string_data.size();
   }
 
+  ExprValue(ExprValue const& copy)
+        : string_val(copy.string_val),
+          bool_val(copy.bool_val),
+          tinyint_val(copy.tinyint_val),
+          smallint_val(copy.smallint_val),
+          int_val(copy.int_val),
+          bigint_val(copy.bigint_val),
+          float_val(copy.float_val),
+          double_val(copy.double_val),
+          timestamp_val(copy.timestamp_val),
+          decimal4_val(copy.decimal4_val),
+          decimal8_val(copy.decimal8_val),
+          decimal16_val(copy.decimal16_val), 
+          collection_val(copy.collection_val)
+    {}
+
+    ExprValue& operator=(ExprValue const& copy)
+    {
+          string_val = StringValue(copy.string_val);
+          bool_val = copy.bool_val;
+          tinyint_val = copy.tinyint_val;
+          smallint_val = copy.smallint_val;
+          int_val = copy.int_val;
+          bigint_val = copy.bigint_val;
+          float_val = copy.float_val;
+          double_val = copy.double_val;
+          timestamp_val = copy.timestamp_val;
+          decimal4_val = copy.decimal4_val;
+          decimal8_val = copy.decimal8_val;
+          decimal16_val = copy.decimal16_val;
+          collection_val = copy.collection_val;
+          return *this;
+    }
+
   /// Sets the value for type to '0' and returns a pointer to the data
   void* SetToZero(const ColumnType& type) {
     switch (type.type) {
