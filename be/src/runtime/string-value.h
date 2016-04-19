@@ -63,6 +63,31 @@ struct StringValue {
     DCHECK_LE(len, MAX_LENGTH);
   }
 
+
+  StringValue(StringValue const& copy) {
+    this->len = copy.len;
+    //delete [] ptr;
+    //ptr = new char[len + 1];
+    //memset(ptr, '\0', len + 1);
+    //strcpy(ptr, copy.ptr);
+    this->ptr = copy.ptr;
+  }
+
+  StringValue& operator=(StringValue const& copy)
+  {
+    if(*this->ptr != copy.ptr)
+    {
+       delete this->ptr;
+       this->ptr = NULL;
+       this->len = strlen(copy.ptr);
+       this->ptr = new char[ this->len + 1];
+       //memset(ptr, '\0', this->len + 1);
+       strcpy(this->ptr, copy.ptr);
+       this->ptr[this->len] = '\0';
+       return *this;
+     }
+  }
+
   /// Byte-by-byte comparison. Returns:
   /// this < other: -1
   /// this == other: 0
