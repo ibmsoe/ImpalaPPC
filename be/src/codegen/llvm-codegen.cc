@@ -193,6 +193,8 @@ Status LlvmCodeGen::LoadModuleFromMemory(LlvmCodeGen* codegen, MemoryBuffer* mod
     ss << "Could not parse module " << module_name << ": " << EC.message();
     return Status(ss.str());
   }
+  std::unique_ptr<Module> M = std::move(moduleErr.get());
+  *module = M.release();
   COUNTER_ADD(codegen->module_bitcode_size_, module_ir->getBufferSize());
   return Status::OK();
 }
