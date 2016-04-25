@@ -128,10 +128,8 @@ static inline uint32_t SSE4_crc32_u8(uint32_t crc, uint8_t v) {
 }
 
 static inline uint32_t SSE4_crc32_u16(uint32_t crc, uint16_t v) {
-#ifdef __ALTIVEC__
-   crc = vec_crc321uh(crc, v);
-#else
-  __asm__("crc32w %1, %0" : "+r"(crc) : "rm"(v));   
+#ifndef __ALTIVEC__
+  __asm__("crc32w %1, %0" : "+r"(crc) : "rm"(v));
 #endif
   return crc;
 }
@@ -147,9 +145,7 @@ static inline uint32_t SSE4_crc32_u32(uint32_t crc, uint32_t v) {
 
 static inline uint32_t SSE4_crc32_u64(uint32_t crc, uint64_t v) {
   uint64_t result = crc;
-#ifdef __ALTIVEC__
-  //result = vec_crc321ud(crc, v);
-#else
+#ifndef __ALTIVEC__
   __asm__("crc32q %1, %0" : "+r"(result) : "rm"(v));
 #endif
   return result;
