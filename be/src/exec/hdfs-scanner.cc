@@ -431,7 +431,7 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
   if (node->num_materialized_partition_keys() == 0) {
     // No partition key slots, just zero the NULL bytes.
     for (int i = 0; i < tuple_desc->num_null_bytes(); ++i) {
-      Value* null_byte = builder.CreateStructGEP(nullptr, tuple_arg, i, "null_byte");
+      Value* null_byte = builder.CreateStructGEP(NULL, tuple_arg, i, "null_byte");
       builder.CreateStore(codegen->GetIntConstant(TYPE_TINYINT, 0), null_byte);
     }
   } else {
@@ -489,7 +489,8 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
 
       // Call slot parse function
       Function* slot_fn = slot_fns[slot_idx];
-      Value* slot_parsed = builder.CreateCall(slot_fn, {tuple_arg, data, len});
+      Value* slot_parsed = builder.CreateCall(slot_fn,
+          ArrayRef<Value*>({tuple_arg, data, len}));
       Value* slot_error = builder.CreateNot(slot_parsed, "slot_parse_error");
       error_in_row = builder.CreateOr(error_in_row, slot_error, "error_in_row");
       slot_error = builder.CreateZExt(slot_error, codegen->GetType(TYPE_TINYINT));
@@ -520,8 +521,8 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
 
       Function* get_ctx_fn =
           codegen->GetFunction(IRFunction::HDFS_SCANNER_GET_CONJUNCT_CTX, false);
-      Value* ctx = builder.CreateCall(
-          get_ctx_fn, {this_arg, codegen->GetIntConstant(TYPE_INT, conjunct_idx)});
+      Value* ctx = builder.CreateCall(get_ctx_fn,
+          ArrayRef<Value*>({this_arg, codegen->GetIntConstant(TYPE_INT, conjunct_idx)}));
 
       Value* conjunct_args[] = {ctx, tuple_row_arg};
       CodegenAnyVal result = CodegenAnyVal::CreateCallWrapped(
@@ -535,7 +536,7 @@ Function* HdfsScanner::CodegenWriteCompleteTuple(
   builder.SetInsertPoint(eval_fail_block);
   builder.CreateRet(codegen->false_value());
 
-  codegen->OptimizeFunctionWithExprs(fn);
+  codegen->FinalizeFunction(fn);
   return codegen->FinalizeFunction(fn);
 }
 

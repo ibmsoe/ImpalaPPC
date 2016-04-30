@@ -328,6 +328,7 @@ set (IMPALA_LINK_LIBS ${IMPALA_LINK_LIBS}
   ${AVRO_STATIC_LIB}
   ${JAVA_JVM_LIBRARY}
   -lrt
+  -ldl # Needed for LLVM
 )
 if($ENV{KUDU_IS_SUPPORTED} STREQUAL true)
   list(APPEND IMPALA_LINK_LIBS kudu_client)
