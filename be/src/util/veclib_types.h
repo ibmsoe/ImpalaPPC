@@ -2,9 +2,9 @@
 /*                                                                            */
 /* Licensed Materials - Property of IBM                                       */
 /*                                                                            */
-/* IBM Power Vector Intrinisic Functions version 1.0.2                        */
+/* IBM Power Vector Intrinisic Functions version 1.0.3                        */
 /*                                                                            */
-/* Copyright IBM Corp. 2014,2015                                              */
+/* Copyright IBM Corp. 2014,2016                                              */
 /* US Government Users Restricted Rights - Use, duplication or                */
 /* disclosure restricted by GSA ADP Schedule Contract with IBM Corp.          */
 /*                                                                            */
@@ -19,20 +19,17 @@
 #ifndef _H_VECLIB_TYPES
 #define _H_VECLIB_TYPES
 
+/******************************************************************************/
 
-/********************************************************************/
-
-
+#define NOT_ALWAYS_INLINE
 /** Control Macros **/
 
 /* Control alignment */
 #define VECLIB_ALIGNED8 __attribute__ ((__aligned__ (8)))
 #define VECLIB_ALIGNED16 __attribute__ ((__aligned__ (16)))
 /* Note: PowerPC only needs 16 byte alignment and stacks are only aligned 16 */
-/* on some compilers: __declspec (align (N)) */
-/* in C++ 11:         alignas (N) */
-
-#define NOT_ALWAYS_INLINE
+/* On some compilers: __declspec (align (N)) */
+/* In C++ 11:         alignas (N) */
 
 /* Control inlining */
 #ifdef NOT_ALWAYS_INLINE
@@ -83,9 +80,9 @@ __m128;
 #endif
 
 typedef
-  VECLIB_ALIGNED16  
+  VECLIB_ALIGNED16
   vector unsigned char
-  __m128i;
+__m128i;
 
 typedef
   VECLIB_ALIGNED16
@@ -131,6 +128,7 @@ typedef const long uintlit8;  /* 8 bit unsigned int literal */
 
 
 /** Internal Types and Constants **/
+
 typedef
   VECLIB_ALIGNED8
   union {
@@ -143,8 +141,6 @@ typedef
     float                     as_float             [2];
     double                    as_double;
   } __m64_union;
-
-
 
 typedef
   VECLIB_ALIGNED8
@@ -163,7 +159,9 @@ typedef
 
 typedef
   VECLIB_ALIGNED16
-  union {
+  union __m128i_union {
+    __m128i_union(){	}
+    __m128i_union(vector unsigned char vecUnSignedChar):as_vector_unsigned_char(vecUnSignedChar){	}
     __m128i                   as_m128i;
     __m64                     as_m64               [2];
     vector signed   char      as_vector_signed_char;
@@ -183,7 +181,7 @@ typedef
     int                       as_int               [4];
     unsigned int              as_unsigned_int      [4];
     long long                 as_long_long         [2];
-  } __m128i_union;
+  };
 
 typedef
   VECLIB_ALIGNED16
@@ -343,8 +341,7 @@ typedef
   #define __vsr_right_half_long_long_in_memory   1
 #endif
 
-
-/************************************************************** Permute **************************************************************/
+/******************************************************* Permute ******************************************************/
 
 #define _MM_SHUFFLE(a, b, c, d) ((intlit8) (a*64+b*16+c*4+d))
 

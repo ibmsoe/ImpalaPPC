@@ -118,7 +118,6 @@ static inline int SSE4_cmpestri(__m128i str1, int len1, __m128i str2, int len2) 
 }
 
 static inline uint32_t SSE4_crc32_u8(uint32_t crc, uint8_t v) {
-
 #ifdef __ALTIVEC__
    crc = vec_crc321ub(crc, v);
 #else
@@ -130,6 +129,8 @@ static inline uint32_t SSE4_crc32_u8(uint32_t crc, uint8_t v) {
 static inline uint32_t SSE4_crc32_u16(uint32_t crc, uint16_t v) {
 #ifndef __ALTIVEC__
   __asm__("crc32w %1, %0" : "+r"(crc) : "rm"(v));
+#else
+  crc = vec_crc321uh(crc, v);
 #endif
   return crc;
 }
@@ -147,6 +148,8 @@ static inline uint32_t SSE4_crc32_u64(uint32_t crc, uint64_t v) {
   uint64_t result = crc;
 #ifndef __ALTIVEC__
   __asm__("crc32q %1, %0" : "+r"(result) : "rm"(v));
+#else
+  result = vec_crc321ud(crc, v);
 #endif
   return result;
 }
