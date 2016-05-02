@@ -82,12 +82,6 @@ class LlvmCodeGenTest : public testing:: Test {
   }
 };
 
-string GetVersionString(bool compact) {
-  stringstream ss;
-  ss << "GetVersionString dummy call";
-  return ss.str();
-}
-
 // Simple test to just make and destroy llvmcodegen objects.  LLVM
 // has non-obvious object ownership transfers and this sanity checks that.
 TEST_F(LlvmCodeGenTest, BasicLifetime) {
