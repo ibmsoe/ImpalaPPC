@@ -19,8 +19,6 @@
 #include <boost/functional/hash.hpp>
 #include <thrift/protocol/TDebugProtocol.h>
 
-#include <x86intrin.h>
-
 #include "codegen/codegen-anyval.h"
 #include "codegen/llvm-codegen.h"
 #include "exec/old-hash-table.inline.h"

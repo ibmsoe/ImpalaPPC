@@ -2,6 +2,7 @@ m4_define([snappy_major], [1])
 m4_define([snappy_minor], [0])
 m4_define([snappy_patchlevel], [5])
 
+
 # Libtool shared library interface versions (current:revision:age)
 # Update this value for every release!  (A:B:C will map to foo.so.(A-C).C.B)
 # http://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html

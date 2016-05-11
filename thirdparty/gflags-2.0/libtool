@@ -2,7 +2,7 @@
 
 # libtool - Provide generalized library-building support services.
 # Generated automatically by config.status (gflags) 2.0
-# Libtool was configured on host pts00453-vm4:
+# Libtool was configured on host pts00450-vm2:
 # NOTE: Changes made to this file will be lost: look at ltmain.sh.
 #
 #   Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2003, 2004, 2005,
@@ -237,7 +237,7 @@ hardcode_into_libs=yes
 sys_lib_search_path_spec="/usr/lib/gcc/powerpc64le-linux-gnu/5 /usr/lib/powerpc64le-linux-gnu /usr/lib /lib/powerpc64le-linux-gnu /lib"
 
 # Run-time system search path for libraries.
-sys_lib_dlsearch_path_spec="/lib /usr/lib /usr/lib/powerpc64le-linux-gnu/libfakeroot /usr/local/lib /lib/powerpc64le-linux-gnu /usr/lib/powerpc64le-linux-gnu /usr/lib/powerpc64le-linux-gnu/mesa-egl /usr/lib/powerpc64le-linux-gnu/mesa "
+sys_lib_dlsearch_path_spec="/lib /usr/lib /usr/lib/powerpc64le-linux-gnu/libfakeroot /usr/local/lib /lib/powerpc64le-linux-gnu /usr/lib/powerpc64le-linux-gnu /usr/lib/powerpc64le-linux-gnu/mesa "
 
 # Whether dlopen is supported.
 dlopen_support=unknown

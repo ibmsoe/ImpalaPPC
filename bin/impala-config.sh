@@ -124,8 +124,8 @@ fi
 KUDU_IS_SUPPORTED=false
 
 export CDH_MAJOR_VERSION=5
-export HADOOP_LZO=${HADOOP_LZO-$IMPALA_HOME/../Imphala_prerequisites/hadoop-lzo}
-export IMPALA_LZO=${IMPALA_LZO-$IMPALA_HOME/../Impala-lzo}
+export HADOOP_LZO=${HADOOP_LZO-$IMPALA_HOME/../hadoop-lzo}
+export IMPALA_LZO=${IMPALA_LZO-$IMPALA_HOME/../impala-lzo}
 export IMPALA_AUX_TEST_HOME=${IMPALA_AUX_TEST_HOME-$IMPALA_HOME/../Impala-auxiliary-tests}
 export TARGET_FILESYSTEM=${TARGET_FILESYSTEM-"hdfs"}
 export FILESYSTEM_PREFIX=${FILESYSTEM_PREFIX-""}
@@ -290,7 +290,7 @@ export PATH=$IMPALA_HOME/bin:$PATH
 
 # Hadoop dependencies are snapshots in the Impala tree
 #export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/
-export HADOOP_HOME=/root/nishidha/Imphala_prerequisites/hadoop-2.6.0-cdh5.5.1/src/hadoop-dist/target/hadoop-2.6.0-cdh5.5.1
+export HADOOP_HOME=/home/test/nishidha/ImphalaPrerequisites/hadoop-2.6.0-cdh5.7.0/src/hadoop-dist/target/hadoop-2.6.0-cdh5.7.0
 
 export HADOOP_CONF_DIR=$IMPALA_FE_DIR/src/test/resources
 

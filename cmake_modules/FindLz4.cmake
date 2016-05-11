@@ -9,7 +9,7 @@
 
 set(LZ4_SEARCH_LIB_PATH
   ${LZ4_ROOT}/lib
-  $ENV{IMPALA_HOME}/thirdparty/lz4
+  $ENV{IMPALA_HOME}/thirdparty/lz4/build
 )
 
 set(LZ4_SEARCH_INCLUDE_DIR
