@@ -75,9 +75,6 @@ add_library(Util
   tuple-row-compare.cc
   url-parser.cc
   url-coding.cc
-  vec128str.cc
-  vec128int.cc
-  vecmisc.cc
 )
 add_dependencies(Util thrift-deps gen_ir_descriptions)
 

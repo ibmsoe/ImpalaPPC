@@ -7,8 +7,8 @@
 #include <altivec.h>
 #include "util/veclib_types.h"
 #include "util/vec128str.h"
-#include "util/vecmisc.h"
 #include "util/vec128int.h"
+#include "util/vecmisc.h"
 
 #define _mm_crc32_u8 vec_crc321ub
 #define _mm_crc32_u32 vec_crc324ub
