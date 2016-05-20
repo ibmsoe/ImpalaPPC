@@ -653,7 +653,6 @@ StructType* TupleDescriptor::GetLlvmStruct(LlvmCodeGen* codegen) const {
 
   // For each null byte, add a byte to the struct
   vector<Type*> struct_fields;
-  struct_fields.resize(num_null_bytes_ + slots_.size());
   for (int i = 0; i < num_null_bytes_; ++i) {
     struct_fields.push_back(codegen->GetType(TYPE_TINYINT));
   }
