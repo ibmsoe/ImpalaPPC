@@ -132,6 +132,8 @@ LlvmCodeGen::LlvmCodeGen(ObjectPool* pool, const string& id) :
   codegen_timer_ = ADD_TIMER(&profile_, "CodegenTime");
   optimization_timer_ = ADD_TIMER(&profile_, "OptimizationTime");
   compile_timer_ = ADD_TIMER(&profile_, "CompileTime");
+  num_functions_ = ADD_COUNTER(&profile_, "NumFunctions", TUnit::UNIT);
+  num_instructions_ = ADD_COUNTER(&profile_, "NumInstructions", TUnit::UNIT);
 
   loaded_functions_.resize(IRFunction::FN_END);
 }
