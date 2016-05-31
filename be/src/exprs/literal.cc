@@ -71,7 +71,7 @@ Literal::Literal(const TExprNode& node)
     case TYPE_VARCHAR: {
       DCHECK_EQ(node.node_type, TExprNodeType::STRING_LITERAL);
       DCHECK(node.__isset.string_literal);
-      value_ = ExprValue(node.string_literal.value);
+      value_.SetStringVal(node.string_literal.value);
       if (type_.type == TYPE_VARCHAR) {
         value_.string_val.len = min(type_.len, value_.string_val.len);
       }
