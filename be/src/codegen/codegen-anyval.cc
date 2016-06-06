@@ -175,7 +175,7 @@ Value* CodegenAnyVal::GetIsNull(const char* name) {
       // Lowered type is of form { i8, * }. Get the i8 value.
       Value* is_null_i64 = builder_->CreateExtractValue(value_, 0);
       DCHECK(is_null_i64->getType() == codegen_->bigint_type());
-      return builder_->CreateTrunc(is_null_i8, codegen_->boolean_type(), name);
+      return builder_->CreateTrunc(is_null_i64, codegen_->boolean_type(), name);
     }
     case TYPE_DECIMAL: {
       // Lowered type is of the form { {i8}, ... }
