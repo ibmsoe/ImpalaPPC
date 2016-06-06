@@ -34,7 +34,7 @@ SKIP_METADATA_LOAD=0
 SKIP_SNAPSHOT_LOAD=0
 SNAPSHOT_FILE=""
 LOAD_DATA_ARGS=""
-JDBC_URL="jdbc:hive2://localhost:11050/default;"
+JDBC_URL="jdbc:hive2://localhost:11050/default;auth=noSasl"
 LOG_DIR=${IMPALA_TEST_CLUSTER_LOG_DIR}/data_loading
 mkdir -p ${LOG_DIR}
 

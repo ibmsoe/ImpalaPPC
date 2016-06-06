@@ -41,16 +41,16 @@ Type* CodegenAnyVal::GetLoweredType(LlvmCodeGen* cg, const ColumnType& type) {
       return cg->int_type();
     case TYPE_INT: // i64
       return cg->bigint_type();
-    case TYPE_BIGINT: // { i8, i64 }
-      return StructType::get(cg->tinyint_type(), cg->bigint_type(), NULL);
+    case TYPE_BIGINT: // { i64, i64 }
+      return StructType::get(cg->bigint_type(), cg->bigint_type(), NULL);
     case TYPE_FLOAT: // i64
       return cg->bigint_type();
-    case TYPE_DOUBLE: // { i8, double }
-      return StructType::get(cg->tinyint_type(), cg->double_type(), NULL);
-    case TYPE_STRING: // { i64, i8* }
-    case TYPE_VARCHAR: // { i64, i8* }
+    case TYPE_DOUBLE: // { i64, double }
+      return StructType::get(cg->bigint_type(), cg->double_type(), NULL);
+    case TYPE_STRING: // { i64, i64 }
+    case TYPE_VARCHAR: // { i64, i64 }
     case TYPE_CHAR:
-      return StructType::get(cg->bigint_type(), cg->ptr_type(), NULL);
+      return StructType::get(cg->bigint_type(), cg->bigint_type(), NULL);
     case TYPE_TIMESTAMP: // { i64, i64 }
       return StructType::get(cg->bigint_type(), cg->bigint_type(), NULL);
     case TYPE_DECIMAL: // %"struct.impala_udf::DecimalVal" (isn't lowered)
@@ -173,8 +173,8 @@ Value* CodegenAnyVal::GetIsNull(const char* name) {
     case TYPE_BIGINT:
     case TYPE_DOUBLE: {
       // Lowered type is of form { i8, * }. Get the i8 value.
-      Value* is_null_i8 = builder_->CreateExtractValue(value_, 0);
-      DCHECK(is_null_i8->getType() == codegen_->tinyint_type());
+      Value* is_null_i64 = builder_->CreateExtractValue(value_, 0);
+      DCHECK(is_null_i64->getType() == codegen_->bigint_type());
       return builder_->CreateTrunc(is_null_i8, codegen_->boolean_type(), name);
     }
     case TYPE_DECIMAL: {
@@ -208,14 +208,6 @@ Value* CodegenAnyVal::GetIsNull(const char* name) {
 
 void CodegenAnyVal::SetIsNull(Value* is_null) {
   switch(type_.type) {
-    case TYPE_BIGINT:
-    case TYPE_DOUBLE: {
-      // Lowered type is of form { i8, * }. Set the i8 value to 'is_null'.
-      Value* is_null_ext =
-          builder_->CreateZExt(is_null, codegen_->tinyint_type(), "is_null_ext");
-      value_ = builder_->CreateInsertValue(value_, is_null_ext, 0, name_);
-      break;
-    }
     case TYPE_DECIMAL: {
       // Lowered type is of form { {i8}, [15 x i8], {i128} }. Set the i8 value to
       // 'is_null'.
@@ -226,6 +218,8 @@ void CodegenAnyVal::SetIsNull(Value* is_null) {
       value_ = builder_->CreateInsertValue(value_, is_null_ext, idxs, name_);
       break;
     }
+    case TYPE_BIGINT:
+    case TYPE_DOUBLE:
     case TYPE_STRING:
     case TYPE_VARCHAR:
     case TYPE_CHAR:
@@ -391,7 +385,8 @@ void CodegenAnyVal::SetVal(double val) {
 Value* CodegenAnyVal::GetPtr() {
   // Set the second pointer value to 'ptr'.
   DCHECK(type_.IsStringType());
-  return builder_->CreateExtractValue(value_, 1, name_);
+  return builder_->CreateBitOrPointerCast(builder_->CreateExtractValue(value_, 1, name_),
+	codegen_->ptr_type(), name_);
 }
 
 Value* CodegenAnyVal::GetLen() {
@@ -404,7 +399,8 @@ Value* CodegenAnyVal::GetLen() {
 void CodegenAnyVal::SetPtr(Value* ptr) {
   // Set the second pointer value to 'ptr'.
   DCHECK(type_.IsStringType());
-  value_ = builder_->CreateInsertValue(value_, ptr, 1, name_);
+  value_ = builder_->CreateInsertValue(value_,
+       builder_->CreateBitOrPointerCast(ptr,codegen_->bigint_type(),name_), 1, name_);
 }
 
 void CodegenAnyVal::SetLen(Value* len) {

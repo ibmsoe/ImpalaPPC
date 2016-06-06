@@ -791,7 +791,7 @@ class HiveConnection(ImpalaConnection):
   PORT = 11050
 
   _DB_TYPE = HIVE
-  _NON_KERBEROS_AUTH_MECH = 'PLAIN'
+  _NON_KERBEROS_AUTH_MECH = 'NOSASL'
 
 
 class PostgresqlCursor(DbCursor):
