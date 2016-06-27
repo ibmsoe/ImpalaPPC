@@ -45,8 +45,8 @@ Type* CodegenAnyVal::GetLoweredType(LlvmCodeGen* cg, const ColumnType& type) {
       return StructType::get(cg->bigint_type(), cg->bigint_type(), NULL);
     case TYPE_FLOAT: // i64
       return cg->bigint_type();
-    case TYPE_DOUBLE: // { i64, double }
-      return StructType::get(cg->bigint_type(), cg->double_type(), NULL);
+    case TYPE_DOUBLE: // { i64, i64 }
+      return StructType::get(cg->bigint_type(), cg->bigint_type(), NULL);
     case TYPE_STRING: // { i64, i64 }
     case TYPE_VARCHAR: // { i64, i64 }
     case TYPE_CHAR:
@@ -278,9 +278,10 @@ Value* CodegenAnyVal::GetVal(const char* name) {
       return builder_->CreateBitCast(val, codegen_->float_type());
     }
     case TYPE_BIGINT:
-    case TYPE_DOUBLE:
-      // Lowered type is of form { i8, * }. Get the second value.
       return builder_->CreateExtractValue(value_, 1, name);
+    case TYPE_DOUBLE:
+      return builder_->CreateBitCast(builder_->CreateExtractValue(value_, 1, name),
+                codegen_->double_type());
     case TYPE_DECIMAL: {
       // Lowered type is of form { {i8}, [15 x i8], {i128} }. Get the i128 value and
       // truncate it to the correct size. (The {i128} corresponds to the union of the
@@ -318,8 +319,10 @@ void CodegenAnyVal::SetVal(Value* val) {
       value_ = SetHighBits(32, val, value_, name_);
       break;
     case TYPE_BIGINT:
+      value_ = builder_->CreateInsertValue(value_, val, 1, name_);
+      break;
     case TYPE_DOUBLE:
-      // Lowered type is of form { i8, * }. Set the second value to 'val'.
+      val = builder_->CreateBitCast(val, codegen_->bigint_type());
       value_ = builder_->CreateInsertValue(value_, val, 1, name_);
       break;
     case TYPE_DECIMAL: {
