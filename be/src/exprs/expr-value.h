@@ -105,13 +105,6 @@ struct ExprValue {
           return *this;
     }
 
-  // Save string data to string_data
-  void SetStringVal(const std::string& str){
-    string_data=str;
-    string_val.ptr = const_cast<char*>(string_data.data());
-    string_val.len = string_data.size();
-  }
-
   /// Sets the value for type to '0' and returns a pointer to the data
   void* SetToZero(const ColumnType& type) {
     switch (type.type) {
