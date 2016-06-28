@@ -244,7 +244,7 @@ class ExprTest : public testing::Test {
       case TYPE_DOUBLE:
         // Construct a StringValue from 'value'. 'value' must be valid for as long as
         // this object is valid.
-        expr_value_.SetStringVal(value);
+        new (&expr_value_) ExprValue(value);
         return &expr_value_.string_val;
       case TYPE_TINYINT:
         expr_value_.tinyint_val =
