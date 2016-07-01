@@ -14,6 +14,7 @@
 
 #include "runtime/descriptors.h"
 
+#include "util/veclib_headers.h"
 #include <boost/algorithm/string/join.hpp>
 #include <gutil/strings/substitute.h>
 #include <ios>

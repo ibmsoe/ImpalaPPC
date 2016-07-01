@@ -18,6 +18,7 @@
 
 #include "common/status.h"
 
+#include "util/veclib_headers.h"
 #include <map>
 #include <memory>
 #include <string>

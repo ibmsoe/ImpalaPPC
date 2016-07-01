@@ -2,9 +2,11 @@
 #define _H_VECLIB_HEADERS
 
 
+#pragma once
 #ifdef __ALTIVEC__
 #define VECLIB_VSX
 #include <altivec.h>
+#include <cstdlib>
 #include "util/veclib_types.h"
 #include "util/vec128str.h"
 #include "util/vec128int.h"

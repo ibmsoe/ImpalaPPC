@@ -14,6 +14,7 @@
 
 #include <sstream>
 
+#include "util/veclib_headers.h"
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/LegacyPassManager.h>
