@@ -132,8 +132,6 @@ class HashUtil {
 
     while (data != end) {
       uint64_t k = *data++;
-      if(k == 0)
-          break;
       k *= MURMUR_PRIME;
       k ^= k >> MURMUR_R;
       k *= MURMUR_PRIME;
