@@ -119,9 +119,12 @@ function build_preamble() {
 # Build Sasl
 if [ $BUILD_ALL -eq 1 ] || [ $BUILD_SASL -eq 1 ]; then
   build_preamble $IMPALA_HOME/thirdparty/cyrus-sasl-${IMPALA_CYRUS_SASL_VERSION} Sasl
+  
+  \cp config/*.m4 cmulocal/
+  autoreconf -f -i
 
   # Need to specify which libdb to use on certain OSes
-  LIBDB_DIR=""
+  LIBDB_DIR="--with-bdb-libdir=/usr/local/BerkeleyDB.4.7/lib --with-bdb-incdir=/usr/local/BerkeleyDB.4.7/include --with-dblib=berkeley"
   if [[ -e "/usr/lib64/libdb4" && -e "/usr/include/libdb4" ]]; then
     LIBDB_DIR="--with-bdb-libdir=/usr/lib64/libdb4 --with-bdb-incdir=/usr/include/libdb4"
   fi
@@ -133,6 +136,7 @@ if [ $BUILD_ALL -eq 1 ] || [ $BUILD_SASL -eq 1 ]; then
     $LIBDB_DIR
   # the first time you do a make it fails, build again.
   (make || make)
+  find plugins/.libs/ -name "*.la" | xargs -i cp {} {}i
   make install
 fi
 
@@ -145,8 +149,8 @@ if [ $BUILD_ALL -eq 1 ] || [ $BUILD_THRIFT -eq 1 ]; then
     PIC_LIB_OPTIONS="--with-zlib=${PIC_LIB_PATH} "
   fi
   JAVA_PREFIX=${THRIFT_HOME}/java PY_PREFIX=${THRIFT_HOME}/python \
-    ./configure --with-pic --prefix=${THRIFT_HOME} \
-    --with-php=no --with-java=no --with-perl=no --with-erlang=no \
+    ./configure --with-pic --prefix=${THRIFT_HOME} --build=powerpc64le-unknown-linux-gnu \
+    --with-php=no --with-java=no --with-perl=no --with-erlang=no --with-boost=/usr/local/lib \
     --with-ruby=no --with-haskell=no --with-erlang=no --with-d=no \
     --with-go=no --with-qt4=no --with-libevent=no ${PIC_LIB_OPTIONS:-}
   make # Make with -j fails
@@ -165,7 +169,7 @@ fi
 if [ $BUILD_ALL -eq 1 ] || [ $BUILD_GFLAGS -eq 1 ]; then
   build_preamble $IMPALA_HOME/thirdparty/gflags-${IMPALA_GFLAGS_VERSION} GFlags
   GFLAGS_INSTALL=`pwd`/third-party-install
-  ./configure --with-pic --prefix=${GFLAGS_INSTALL}
+  ./configure --with-pic --build=powerpc64le-unknown-linux-gnu --prefix=${GFLAGS_INSTALL}
    make -j${IMPALA_BUILD_THREADS:-4} install
 fi
 
@@ -176,14 +180,14 @@ if [ $BUILD_ALL -eq 1 ] || [ $BUILD_PPROF -eq 1 ]; then
   # TODO: google perf tools indicates this might be necessary on 64 bit systems.
   # we're not compiling the rest of our code to not omit frame pointers but it
   # still seems to generate useful profiling data.
-  ./configure --enable-frame-pointers --with-pic
+  ./configure --enable-frame-pointers --with-pic --build=powerpc64le-unknown-linux-gnu
    make -j${IMPALA_BUILD_THREADS:-4}
 fi
 
 # Build glog
 if [ $BUILD_ALL -eq 1 ] || [ $BUILD_GLOG -eq 1 ]; then
   build_preamble  $IMPALA_HOME/thirdparty/glog-${IMPALA_GLOG_VERSION} GLog
-  ./configure --with-pic --with-gflags=${GFLAGS_INSTALL}
+  ./configure --with-pic --build=powerpc64le-unknown-linux-gnu --with-gflags=${GFLAGS_INSTALL}
   # SLES's gcc45-c++ is required for sse2 support (default is 4.3), but crashes
   # when building logging_unittest-logging_unittest.o. Telling it to uses the
   # stabs format for debugging symbols instead of dwarf exercises a different
@@ -207,7 +211,7 @@ fi
 if [ $BUILD_ALL -eq 1 ] || [ $BUILD_SNAPPY -eq 1 ]; then
   build_preamble $IMPALA_HOME/thirdparty/snappy-${IMPALA_SNAPPY_VERSION} Snappy
   ./autogen.sh
-  ./configure --with-pic --prefix=$IMPALA_HOME/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build
+  ./configure --with-pic --build=powerpc64le-unknown-linux-gnu --prefix=$IMPALA_HOME/thirdparty/snappy-${IMPALA_SNAPPY_VERSION}/build
   make install
 fi
 
@@ -227,7 +231,7 @@ fi
 # Build Ldap
 if [ $BUILD_ALL -eq 1 ] || [ $BUILD_LDAP -eq 1 ]; then
     build_preamble $IMPALA_HOME/thirdparty/openldap-${IMPALA_OPENLDAP_VERSION} Openldap
-    ./configure --enable-slapd=no --prefix=`pwd`/impala_install --enable-static --with-pic
+    ./configure --enable-slapd=no --prefix=`pwd`/impala_install --enable-static --with-pic --build=powerpc64le-unknown-linux-gnu
      make -j${IMPALA_BUILD_THREADS:-4}
      make -j${IMPALA_BUILD_THREADS:-4} depend
     make install
@@ -239,3 +243,4 @@ if [ $BUILD_ALL -eq 1 ] || [ $BUILD_AVRO -eq 1 ]; then
   cmake .
    make -j${IMPALA_BUILD_THREADS:-4}
 fi
+
