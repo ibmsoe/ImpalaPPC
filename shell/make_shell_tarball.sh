@@ -92,8 +92,8 @@ done
 
 # Copy all the shell files into the build dir
 # The location of python libs for thrift is different in rhel/centos/sles
-if [ -d ${THRIFT_HOME}/python/lib/python*/site-packages/thrift ]; then
-  cp -r ${THRIFT_HOME}/python/lib/python*/site-packages/thrift\
+if [ -d ${THRIFT_HOME}/python/lib64/python*/site-packages/thrift ]; then
+  cp -r ${THRIFT_HOME}/python/lib64/python*/site-packages/thrift\
         ${TARBALL_ROOT}/lib
 else
 #  cp -r ${THRIFT_HOME}/python/lib64/python*/site-packages/thrift\

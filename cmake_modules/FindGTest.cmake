@@ -43,14 +43,14 @@ find_path(GTEST_INCLUDE_DIR ${GTEST_H}
 
 find_library(GTEST_LIBRARY NAMES gtest
   PATHS ${GTEST_ROOT}/lib
-        $ENV{IMPALA_HOME}/thirdparty/gtest-1.6.0/lib
+        $ENV{IMPALA_HOME}/thirdparty/gtest-1.6.0
         NO_DEFAULT_PATH
   DOC   "Google's framework for writing C++ tests (gtest)"
 )
 
 find_library(GTEST_MAIN_LIBRARY NAMES gtest_main
   PATHS ${GTEST_ROOT}/lib
-        $ENV{IMPALA_HOME}/thirdparty/gtest-1.6.0/lib
+        $ENV{IMPALA_HOME}/thirdparty/gtest-1.6.0
         NO_DEFAULT_PATH
   DOC   "Google's framework for writing C++ tests (gtest_main)"
 )
