@@ -289,8 +289,7 @@ export IMPALA_COMMON_DIR=$IMPALA_HOME/common
 export PATH=$IMPALA_HOME/bin:$PATH
 
 # Hadoop dependencies are snapshots in the Impala tree
-#export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/
-export HADOOP_HOME=/home/test/nishidha/ImphalaPrerequisites/hadoop-2.6.0-cdh5.7.0/src/hadoop-dist/target/hadoop-2.6.0-cdh5.7.0
+export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/src/hadoop-dist/target/hadoop-${IMPALA_HADOOP_VERSION}
 
 export HADOOP_CONF_DIR=$IMPALA_FE_DIR/src/test/resources
 
@@ -402,7 +401,7 @@ LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JAVA}`:`dirname ${LIB_JSIG}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:`dirname ${LIB_JVM}`:`dirname ${LIB_HDFS}`"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_HOME}/be/build/debug/service"
 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_SNAPPY_PATH}"
-LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$IMPALA_LZO/target"
+LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$IMPALA_LZO/build"
 
 if [[ -n "$IMPALA_TOOLCHAIN" ]]; then
   LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${IMPALA_TOOLCHAIN}/gcc-${IMPALA_GCC_VERSION}/lib64"
