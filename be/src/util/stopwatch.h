@@ -72,15 +72,14 @@ class StopWatch {
     __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
     return (uint64_t)hi << 32 | lo;
   #elif defined(__powerpc__) || defined(__ppc__)
-   #warning "On POWER, we do not have cpuid instruction. TODO:: Fix this!"
     // This returns a time-base, which is not always precisely a cycle-count.
 
     __asm__ __volatile__ ("sync" : : : "memory");
     int64 tbl, tbu0, tbu1;
 
-    asm("mftbu %0" : "=r" (tbu0));
-    asm("mftb  %0" : "=r" (tbl));
-    asm("mftbu %0" : "=r" (tbu1));
+    asm volatile("mftbu %0" : "=r" (tbu0));
+    asm volatile("mftb  %0" : "=r" (tbl));
+    asm volatile("mftbu %0" : "=r" (tbu1));
     tbl &= -static_cast<int64>(tbu0 == tbu1);
     // high 32 bits in tbu1; low 32 bits in tbl  (tbu0 is garbage)
     return (tbu1 << 32) | tbl;

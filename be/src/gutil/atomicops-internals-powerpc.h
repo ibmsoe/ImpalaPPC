@@ -159,7 +159,7 @@ inline void NoBarrier_Store(volatile Atomic32* ptr, Atomic32 value) {
 }
 
 inline void PauseCPU() {
-  asm volatile ("or 1,1,1");
+  asm volatile ("or 27,27,27");
 }
 
 inline void Acquire_Store(volatile Atomic32* ptr, Atomic32 value) {
