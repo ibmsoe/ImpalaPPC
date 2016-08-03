@@ -20,6 +20,13 @@
 # will be set by other scripts before sourcing this file. Those options are not set in
 # this script because scripts outside this repository may need to be updated and that
 # is not practical at this time.
+
+# Set "ulimit -l" as 2048K because default vaule of dfs.datanode.max.locked.memory
+# in hdfs-site.xml is set 2048000. This value is used for testdata. If your
+# dfs.datanode.max.locked.memory different, please make sure it's less than
+# "ulimit -l".
+ulimit -l 2048
+
 export JAVA_HOME="${JAVA_HOME:-/usr/java/default}"
 if [ ! -d "$JAVA_HOME" ] ; then
   echo "JAVA_HOME must be set to the location of your JDK!"
