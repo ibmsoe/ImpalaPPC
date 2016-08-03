@@ -462,8 +462,8 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
     const TQueryOptions& query_options, FragmentScanRangeAssignment* assignment) {
   // We adjust all replicas with memory distance less than base_distance to base_distance
   // and view all replicas with equal or better distance as the same. For a full list of
-  // memory distance classes see TReplicaPreference in ImpalaInternalService.thrift.
-  TReplicaPreference::type base_distance = query_options.replica_preference;
+  // memory distance classes see TReplicaPreference in PlanNodes.thrift.
+  TReplicaPreference::type base_distance = TReplicaPreference::CACHE_LOCAL;
   // The query option to disable cached reads adjusts the memory base distance to view
   // all replicas as disk_local or worse.
   // TODO remove in CDH6
@@ -509,16 +509,11 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
         // the replica as not cached (network transfer dominates anyway in this case).
         // TODO: measure this in a cluster setup. Are remote reads better with caching?
         if (location.is_cached) {
-          is_cached = true;
           memory_distance = TReplicaPreference::CACHE_LOCAL;
         } else {
-          is_cached = false;
           memory_distance = TReplicaPreference::DISK_LOCAL;
         }
-        remote_read = false;
       } else {
-        is_cached = false;
-        remote_read = true;
         memory_distance = TReplicaPreference::REMOTE;
       }
       memory_distance = max(memory_distance, base_distance);
@@ -562,6 +557,8 @@ Status SimpleScheduler::ComputeScanRangeAssignment(
         min_assigned_bytes = assigned_bytes;
         data_host = &replica_host;
         volume_id = location.volume_id;
+        is_cached = location.is_cached;
+        remote_read = min_distance == TReplicaPreference::REMOTE;
       }
     }  // end of BOOST_FOREACH
 
