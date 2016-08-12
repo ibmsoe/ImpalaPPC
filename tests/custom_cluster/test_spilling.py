@@ -27,17 +27,9 @@ class TestSpillStress(CustomClusterTestSuite):
 
   @classmethod
   def setup_class(cls):
-    super(TestSpillStress, cls).setup_class()
-    if cls.exploration_strategy() != 'exhaustive':
-      pytest.skip('runs only in exhaustive')
-    # Since test_spill_stress below runs TEST_IDS * NUM_ITERATIONS times, but we only
-    # need Impala to start once, it's inefficient to use
-    # @CustomClusterTestSuite.with_args() to restart Impala every time. Instead, start
-    # Impala here, once.
-    #
-    # Start with 256KB buffers to reduce data size required to force spilling.
-    cls._start_impala_cluster(['--impalad_args=--"read_size=262144"',
+    cls._start_impala_cluster(['--impalad_args=--"read_size=270000"',
         'catalogd_args="--load_catalog_in_background=false"'])
+    super(CustomClusterTestSuite, cls).setup_class()
 
   def setup_method(self, method):
     # We don't need CustomClusterTestSuite.setup_method() or teardown_method() here
