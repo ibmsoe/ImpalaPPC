@@ -295,6 +295,9 @@ export IMPALA_AUX_DATASET_DIR=$IMPALA_AUX_TEST_HOME/testdata/datasets
 export IMPALA_COMMON_DIR=$IMPALA_HOME/common
 export PATH=$IMPALA_HOME/bin:$PATH
 
+export IMPALA_EE_TEST_LOGS_DIR=${IMPALA_HOME}/tests/results
+export IMPALA_CUSTOM_CLUSTER_TEST_LOGS_DIR=${IMPALA_HOME}/tests/custom_cluster/results
+
 # Hadoop dependencies are snapshots in the Impala tree
 export HADOOP_HOME=$IMPALA_HOME/thirdparty/hadoop-${IMPALA_HADOOP_VERSION}/src/hadoop-dist/target/hadoop-${IMPALA_HADOOP_VERSION}
 

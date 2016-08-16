@@ -57,9 +57,11 @@ if [[ "${TARGET_FILESYSTEM}" == "local" ]]; then
 else
   TEST_START_CLUSTER_ARGS="${TEST_START_CLUSTER_ARGS} --cluster_size=3"
 fi
+# Indicates whether code coverage reports should be generated.
+: ${CODE_COVERAGE:=false}
 
 # parse command line options
-while getopts "e:n:" OPTION
+while getopts "e:n:c" OPTION
 do
   case "$OPTION" in
     e)
@@ -68,17 +70,31 @@ do
     n)
       NUM_TEST_ITERATIONS=$OPTARG
       ;;
+    c)
+      CODE_COVERAGE=true
+      ;;
     ?)
       echo "run-all-tests.sh [-e <exploration_strategy>] [-n <num_iters>]"
       echo "[-e] The exploration strategy to use. Default exploration is 'core'."
       echo "[-n] The number of times to run the tests. Default is 1."
+      echo "[-c] Set this option to generate code coverage reports."
       exit 1;
       ;;
   esac
 done
 
-LOG_DIR=${IMPALA_TEST_CLUSTER_LOG_DIR}/query_tests
-mkdir -p ${LOG_DIR}
+# The EXPLORATION_STRATEGY parameter should only apply to the
+# functional-query workload because the larger datasets (ex. tpch) are
+# not generated in all table formats.
+COMMON_PYTEST_ARGS="--maxfail=${MAX_PYTEST_FAILURES} --exploration_strategy=core"`
+    `" --workload_exploration_strategy=functional-query:$EXPLORATION_STRATEGY"
+if [[ "${TARGET_FILESYSTEM}" == "local" ]]; then
+  # Only one impalad is supported when running against local filesystem.
+  COMMON_PYTEST_ARGS+=" --impalad=localhost:21000"
+fi
+
+# For logging when using run-step.
+LOG_DIR=${IMPALA_EE_TEST_LOGS_DIR}
 
 # Enable core dumps
 ulimit -c unlimited
@@ -96,7 +112,7 @@ do
   TEST_RET_CODE=0
 
   run-step "Starting Impala cluster" start-impala-cluster.log \
-      ${IMPALA_HOME}/bin/start-impala-cluster.py --log_dir=${LOG_DIR} \
+      ${IMPALA_HOME}/bin/start-impala-cluster.py --log_dir=${IMPALA_EE_TEST_LOGS_DIR} \
       ${TEST_START_CLUSTER_ARGS}
 
   if [[ "$BE_TEST" == true ]]; then
@@ -127,7 +143,10 @@ do
     MVN_ARGS=""
     if [[ "${TARGET_FILESYSTEM}" == "s3" ]]; then
       # When running against S3, only run the S3 frontend tests.
-      MVN_ARGS="-Dtest=S3*"
+      MVN_ARGS="-Dtest=S3* "
+    fi
+    if [[ "$CODE_COVERAGE" == true ]]; then
+      MVN_ARGS+="-DcodeCoverage"
     fi
     if ! ${IMPALA_HOME}/bin/mvn-quiet.sh -fae test ${MVN_ARGS}; then
       TEST_RET_CODE=1
@@ -136,20 +155,10 @@ do
   fi
 
   if [[ "$EE_TEST" == true ]]; then
-    # Run end-to-end tests. The EXPLORATION_STRATEGY parameter should only apply to the
-    # functional-query workload because the larger datasets (ex. tpch) are not generated
-    # in all table formats.
+    # Run end-to-end tests.
     # KERBEROS TODO - this will need to deal with ${KERB_ARGS}
-    LOCAL_FS_ARGS=""
-    if [[ "$TARGET_FILESYSTEM" == "local" ]]; then
-      # Only one impalad is supported when running against local filesystem.
-      LOCAL_FS_ARGS="--impalad=localhost:21000"
-    fi
-    if ! ${IMPALA_HOME}/tests/run-tests.py --maxfail=${MAX_PYTEST_FAILURES} \
-         --exploration_strategy=core \
-         --workload_exploration_strategy=functional-query:$EXPLORATION_STRATEGY \
-         ${LOCAL_FS_ARGS} \
-         ${EE_TEST_FILES}; then #${KERB_ARGS};
+    if ! ${IMPALA_HOME}/tests/run-tests.py ${COMMON_PYTEST_ARGS} ${EE_TEST_FILES}; then
+      #${KERB_ARGS};
       TEST_RET_CODE=1
     fi
   fi
@@ -157,7 +166,7 @@ do
   if [[ "$JDBC_TEST" == true ]]; then
     # Run the JDBC tests with background loading disabled. This is interesting because
     # it requires loading missing table metadata.
-    ${IMPALA_HOME}/bin/start-impala-cluster.py --log_dir=${LOG_DIR} \
+    ${IMPALA_HOME}/bin/start-impala-cluster.py --log_dir=${IMPALA_EE_TEST_LOGS_DIR} \
         --catalogd_args=--load_catalog_in_background=false \
         ${TEST_START_CLUSTER_ARGS}
     pushd ${IMPALA_FE_DIR}
@@ -168,13 +177,22 @@ do
   fi
 
   if [[ "$CLUSTER_TEST" == true ]]; then
+    # For custom cluster tests only, set an unlimited log rotation
+    # policy, for the mini cluster is restarted many times. So as not to
+    # pollute the directory with too many files, remove what was there
+    # before. Also, save the IMPALA_MAX_LOG_FILES value for re-set
+    # later.
+    rm -rf ${IMPALA_CUSTOM_CLUSTER_TEST_LOGS_DIR}
+    mkdir -p ${IMPALA_CUSTOM_CLUSTER_TEST_LOGS_DIR}
+    IMPALA_MAX_LOG_FILES_SAVE=${IMPALA_MAX_LOG_FILES:-10}
+    export IMPALA_MAX_LOG_FILES=0
     # Run the custom-cluster tests after all other tests, since they will restart the
     # cluster repeatedly and lose state.
     # TODO: Consider moving in to run-tests.py.
-    if ! ${IMPALA_HOME}/tests/run-custom-cluster-tests.sh \
-         --maxfail=${MAX_PYTEST_FAILURES}; then
+    if ! ${IMPALA_HOME}/tests/run-custom-cluster-tests.sh ${COMMON_PYTEST_ARGS}; then
       TEST_RET_CODE=1
     fi
+    export IMPALA_MAX_LOG_FILES=${IMPALA_MAX_LOG_FILES_SAVE}
   fi
 
   # Finally, run the process failure tests.
@@ -185,3 +203,4 @@ do
     exit $TEST_RET_CODE
   fi
 done
+
